@@ -466,7 +466,7 @@ class StableDiffusionAOVDropoutPipeline(
 
         batch_size = batch_size * num_images_per_prompt
 
-        if image.shape[1] == 4:
+        if image.shape[1] == 4: # Checks to see if the image is already in latent space
             image_latents = image
         else:
             if isinstance(generator, list) and len(generator) != batch_size:

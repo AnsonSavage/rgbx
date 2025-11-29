@@ -8,7 +8,7 @@ MODEL_NAME="zheng95z/x-to-rgb"
 OUTPUT_DIR="x2rgb-finetuned"
 
 # Run training
-accelerate launch train_x2rgb.py \
+python train_x2rgb.py \
   --pretrained_model_name_or_path=$MODEL_NAME \
   --dataset_path=$DATASET_PATH \
   --output_dir=$OUTPUT_DIR \

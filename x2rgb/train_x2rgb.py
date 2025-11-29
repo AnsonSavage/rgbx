@@ -2,13 +2,10 @@ import argparse
 import math
 import os
 import sys
+import logging
 
 import torch
 import torch.nn.functional as F
-from accelerate import Accelerator
-from accelerate.logging import get_logger
-kay,
-from accelerate.utils import set_seed
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
@@ -22,7 +19,8 @@ from pipeline_x2rgb import StableDiffusionAOVDropoutPipeline
 sys.path.append(os.path.join(os.path.dirname(__file__), "../../"))
 from dataloader import LightingFineTuneDataset
 
-logger = get_logger(__name__)
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Simple training script for x2rgb.")
@@ -101,13 +99,14 @@ def parse_args():
 
 def main():
     args = parse_args()
-    accelerator = Accelerator(
-        gradient_accumulation_steps=args.gradient_accumulation_steps,
-        mixed_precision=args.mixed_precision,
-    )
+    
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    logger.info(f"Using device: {device}")
 
     if args.seed is not None:
-        set_seed(args.seed)
+        torch.manual_seed(args.seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(args.seed)
 
     # 1. Load Pipeline and Models
     # We load the full pipeline to get all components, then extract what we need for training
@@ -125,6 +124,11 @@ def main():
     
     # Set UNet to train
     unet.train()
+    
+    # Move models to device
+    vae.to(device)
+    text_encoder.to(device)
+    unet.to(device)
 
     # 2. Setup Dataset and Dataloader
     # The dataset returns: ((albedo, roughness, metallic, normal), prompt), target_image
@@ -179,15 +183,6 @@ def main():
         lr=args.learning_rate,
     )
 
-    # 4. Prepare with Accelerator
-    unet, optimizer, train_dataloader = accelerator.prepare(
-        unet, optimizer, train_dataloader
-    )
-    
-    # Move vae and text_encoder to device
-    vae.to(accelerator.device, dtype=torch.float32)
-    text_encoder.to(accelerator.device, dtype=torch.float32)
-
     # Scaling factors from pipeline_x2rgb.py
     SCALING_FACTORS = {
         "albedo": 0.17301377137652138,
@@ -204,95 +199,94 @@ def main():
     lr_scheduler = get_scheduler(
         args.lr_scheduler,
         optimizer=optimizer,
-        num_warmup_steps=args.lr_warmup_steps * args.gradient_accumulation_steps,
-        num_training_steps=args.max_train_steps * args.gradient_accumulation_steps,
+        num_warmup_steps=args.lr_warmup_steps,
+        num_training_steps=args.max_train_steps,
     )
 
     global_step = 0
-    progress_bar = tqdm(range(args.max_train_steps), disable=not accelerator.is_local_main_process)
+    progress_bar = tqdm(range(args.max_train_steps))
     progress_bar.set_description("Steps")
+    
+    scaler = torch.cuda.amp.GradScaler(enabled=(args.mixed_precision == "fp16"))
 
     for epoch in range(args.num_train_epochs):
         for step, batch in enumerate(train_dataloader):
-            with accelerator.accumulate(unet):
-                # A. Encode Target Image (Ground Truth)
-                # Convert images to [-1, 1]
-                latents = vae.encode(batch["target_images"].to(dtype=torch.float32) * 2.0 - 1.0).latent_dist.sample()
+            
+            # A. Encode Target Image (Ground Truth)
+            target_images = batch["target_images"].to(device)
+            
+            with torch.no_grad():
+                # Scale images to [-1, 1]
+                latents = vae.encode(target_images.to(dtype=torch.float32) * 2.0 - 1.0).latent_dist.sample()
                 latents = latents * vae.config.scaling_factor
 
-                # B. Sample Noise
-                noise = torch.randn_like(latents)
-                batch_size = latents.shape[0]
-                timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (batch_size,), device=latents.device)
-                timesteps = timesteps.long()
+            # B. Sample Noise
+            noise = torch.randn_like(latents)
+            batch_size = latents.shape[0]
+            timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (batch_size,), device=latents.device)
+            timesteps = timesteps.long()
 
-                # C. Add Noise (Forward Diffusion)
-                noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
+            # C. Add Noise (Forward Diffusion)
+            noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
-                # D. Encode Prompts
-                inputs = tokenizer(
-                    batch["prompts"], max_length=tokenizer.model_max_length, padding="max_length", truncation=True, return_tensors="pt"
-                )
-                encoder_hidden_states = text_encoder(inputs.input_ids.to(accelerator.device))[0]
+            # D. Encode Prompts
+            inputs = tokenizer(
+                batch["prompts"], max_length=tokenizer.model_max_length, padding="max_length", truncation=True, return_tensors="pt"
+            )
+            with torch.no_grad():
+                encoder_hidden_states = text_encoder(inputs.input_ids.to(device))[0]
 
-                # E. Prepare AOV Conditioning
-                # We need to encode each AOV and concatenate them
-                aov_latents_list = []
-                
-                ordered_aov_keys = ["albedo", "roughness", "metallic"]
-                
+            # E. Prepare AOV Conditioning
+            aov_latents_list = []
+            ordered_aov_keys = ["albedo", "roughness", "metallic"]
+            
+            with torch.no_grad():
                 for key in ordered_aov_keys:
-                    aov_img = batch["aov_images"][key].to(accelerator.device, dtype=torch.float32) # TODO: ensure the order that aovs are passed matches what is expected in the VAE
-                    # Normalize to [-1, 1]
+                    aov_img = batch["aov_images"][key].to(device, dtype=torch.float32)
                     aov_img = aov_img * 2.0 - 1.0
                     
-                    # Encode
                     aov_latent = vae.encode(aov_img).latent_dist.mode()
                     
-                    # Scale
                     aov_latent = aov_latent * SCALING_FACTORS[key]
-                    
                     aov_latents_list.append(aov_latent)
-                
-                # Concatenate all AOV latents
-                conditioning_latents = torch.cat(aov_latents_list, dim=1)
-                
-                # Concatenate noisy latents with conditioning latents
-                # UNet input: [noisy_latents, albedo_latents, roughness_latents, metallic_latents]
-                unet_input = torch.cat([noisy_latents, conditioning_latents], dim=1)
+            
+            conditioning_latents = torch.cat(aov_latents_list, dim=1)
+            unet_input = torch.cat([noisy_latents, conditioning_latents], dim=1)
 
-                # F. Predict Noise
+            # F. Predict Noise
+            with torch.cuda.amp.autocast(enabled=(args.mixed_precision == "fp16")):
                 model_pred = unet(unet_input, timesteps, encoder_hidden_states=encoder_hidden_states).sample
-
-                # G. Loss
                 loss = F.mse_loss(model_pred.float(), noise.float(), reduction="mean")
+                loss = loss / args.gradient_accumulation_steps
 
-                accelerator.backward(loss)
-                optimizer.step()
+            scaler.scale(loss).backward()
+            
+            if (step + 1) % args.gradient_accumulation_steps == 0:
+                scaler.step(optimizer)
+                scaler.update()
+                
                 lr_scheduler.step()
                 optimizer.zero_grad()
 
-            if accelerator.sync_gradients:
                 progress_bar.update(1)
                 global_step += 1
                 
                 if global_step % 500 == 0:
-                    if accelerator.is_main_process:
-                        save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
-                        accelerator.save_state(save_path)
-                        logger.info(f"Saved state to {save_path}")
+                    save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
+                    os.makedirs(save_path, exist_ok=True)
+                    pipeline.unet = unet
+                    pipeline.save_pretrained(save_path)
+                    logger.info(f"Saved state to {save_path}")
 
-            logs = {"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
+            logs = {"loss": loss.detach().item() * args.gradient_accumulation_steps, "lr": lr_scheduler.get_last_lr()[0]}
             progress_bar.set_postfix(**logs)
 
             if global_step >= args.max_train_steps:
                 break
 
-    # Save final model
-    if accelerator.is_main_process:
-        pipeline.unet = unet
-        pipeline.save_pretrained(args.output_dir)
-        logger.info(f"Model saved to {args.output_dir}")
+    pipeline.unet = unet
+    pipeline.save_pretrained(args.output_dir)
+    logger.info(f"Model saved to {args.output_dir}")
 
 if __name__ == "__main__":
     main()

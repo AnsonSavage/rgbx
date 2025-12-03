@@ -17,7 +17,17 @@ from pipeline_x2rgb import StableDiffusionAOVDropoutPipeline
 # -------------------------------
 
 
-def load_aov_image(filepath, aov_type):
+def get_default_device():
+    """
+    Determine the default device based on availability.
+    Prefers CUDA if available, falls back to CPU.
+    """
+    if torch.cuda.is_available():
+        return "cuda"
+    return "cpu"
+
+
+def load_aov_image(filepath, aov_type, device):
     """
     Loads and preprocesses a single AOV image based on its type and file extension.
     This logic is extracted directly from your original callback.
@@ -30,21 +40,21 @@ def load_aov_image(filepath, aov_type):
     print(f"Loading {aov_type}: {filepath}")
     if filepath.endswith(".exr"):
         if aov_type == 'normal':
-            return load_exr_image(filepath, normalize=True).to("cuda")
+            return load_exr_image(filepath, normalize=True).to(device)
         if aov_type == 'irradiance':
-            return load_exr_image(filepath, tonemaping=True, clamp=True).to("cuda")
+            return load_exr_image(filepath, tonemaping=True, clamp=True).to(device)
         # albedo, roughness, metallic
-        return load_exr_image(filepath, clamp=True).to("cuda")
+        return load_exr_image(filepath, clamp=True).to(device)
     
     elif filepath.endswith((".png", ".jpg", ".jpeg")):
         if aov_type == 'normal':
-            return load_ldr_image(filepath, normalize=True).to("cuda")
+            return load_ldr_image(filepath, normalize=True).to(device)
         if aov_type == 'albedo':
-            return load_ldr_image(filepath, from_srgb=True).to("cuda")
+            return load_ldr_image(filepath, from_srgb=True).to(device)
         if aov_type == 'irradiance':
-            return load_ldr_image(filepath, from_srgb=True, clamp=True).to("cuda")
+            return load_ldr_image(filepath, from_srgb=True, clamp=True).to(device)
         # roughness, metallic
-        return load_ldr_image(filepath, clamp=True).to("cuda")
+        return load_ldr_image(filepath, clamp=True).to(device)
     
     else:
         print(f"Warning: Unsupported file type, skipping: {filepath}")
@@ -54,6 +64,9 @@ def main(args):
     """
     Main function to load the model, process inputs, and run inference.
     """
+    # Determine device
+    device = args.device if args.device else get_default_device()
+    print(f"Using device: {device}")
     
     # 1. Load pipeline
     print("Loading pipeline...")
@@ -62,20 +75,20 @@ def main(args):
         "zheng95z/x-to-rgb",
         torch_dtype=torch.float16,
         cache_dir=cache_dir,
-    ).to("cuda")
+    ).to(device)
     pipe.scheduler = DDIMScheduler.from_config(
         pipe.scheduler.config, rescale_betas_zero_snr=True, timestep_spacing="trailing"
     )
     pipe.set_progress_bar_config(disable=True)
-    pipe.to("cuda")
+    pipe.to(device)
 
     # 2. Load all AOV images
     print("Loading AOV images...")
-    albedo_image = load_aov_image(args.albedo, 'albedo')
-    normal_image = load_aov_image(args.normal, 'normal')
-    roughness_image = load_aov_image(args.roughness, 'roughness')
-    metallic_image = load_aov_image(args.metallic, 'metallic')
-    irradiance_image = load_aov_image(args.irradiance, 'irradiance')
+    albedo_image = load_aov_image(args.albedo, 'albedo', device)
+    normal_image = load_aov_image(args.normal, 'normal', device)
+    roughness_image = load_aov_image(args.roughness, 'roughness', device)
+    metallic_image = load_aov_image(args.metallic, 'metallic', device)
+    irradiance_image = load_aov_image(args.irradiance, 'irradiance', device)
 
     # 3. Determine height/width
     height, width = 768, 768 # Default
@@ -97,10 +110,10 @@ def main(args):
     # 4. Setup generator
     if args.seed == -1:
         # Generate a random seed if -1 is specified
-        args.seed = torch.Generator(device="cuda").seed()
+        args.seed = torch.Generator(device=device).seed()
         
     print(f"Using seed: {args.seed}")
-    generator = torch.Generator(device="cuda").manual_seed(args.seed)
+    generator = torch.Generator(device=device).manual_seed(args.seed)
 
     # 5. Run inference
     print("Running inference...")
@@ -157,6 +170,7 @@ if __name__ == "__main__":
     
     # --- System Arguments ---
     parser.add_argument("--cache_dir", type=str, default="./model_cache", help="Directory to cache the downloaded model")
+    parser.add_argument("--device", type=str, default=None, help="Device to use for inference (e.g., 'cuda', 'cpu'). If not provided, defaults to CUDA if available, otherwise CPU.")
 
     args = parser.parse_args()
     main(args)

@@ -76,6 +76,14 @@ def main(args):
         torch_dtype=torch.float16,
         cache_dir=cache_dir,
     ).to(device)
+
+    if args.unet_checkpoint:
+        unet = pipe.unet
+        assert os.path.isdir(args.unet_checkpoint), f"Provided UNet checkpoint path is not a directory: {args.unet_checkpoint}"
+        print(f"Loading UNet weights from checkpoint: {args.unet_checkpoint}")
+        unet = unet.__class__.from_pretrained(args.unet_checkpoint, torch_dtype=torch.float16).to(device)
+        pipe.unet = unet
+
     pipe.scheduler = DDIMScheduler.from_config(
         pipe.scheduler.config, rescale_betas_zero_snr=True, timestep_spacing="trailing"
     )
@@ -167,6 +175,7 @@ if __name__ == "__main__":
     parser.add_argument("--inference_step", type=int, default=100, help="Number of inference steps")
     parser.add_argument("--guidance_scale", type=float, default=7.5, help="Text guidance scale")
     parser.add_argument("--image_guidance_scale", type=float, default=1.5, help="Image guidance scale")
+    parser.add_argument("--unet_checkpoint", type=str, default=None, help="Path to UNet checkpoint to load (optional)")
     
     # --- System Arguments ---
     parser.add_argument("--cache_dir", type=str, default="./model_cache", help="Directory to cache the downloaded model")

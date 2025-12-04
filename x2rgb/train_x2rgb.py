@@ -297,6 +297,9 @@ def main():
             loss = F.mse_loss(model_pred.float(), noise.float())
             loss = loss / arg_gradient_accumulation_steps
 
+            # Update progress bar with current loss value
+            progress_bar.set_postfix({"loss": loss.item() * arg_gradient_accumulation_steps})
+
             loss.backward()
             
             if (step + 1) % arg_gradient_accumulation_steps == 0:
@@ -308,14 +311,14 @@ def main():
                 progress_bar.update(1)
                 global_step += 1
                 
-                if global_step % 500 == 0:
+                if global_step % 50 == 0:
                     save_path = os.path.join(arg_output_dir, f"checkpoint-{global_step}")
                     os.makedirs(save_path, exist_ok=True)
                     unet.save_pretrained(save_path)
                     logger.info(f"Saved UNet checkpoint to {save_path}")
 
-            logs = {"loss": loss.detach().item() * arg_gradient_accumulation_steps, "lr": lr_scheduler.get_last_lr()[0]}
-            progress_bar.set_postfix(**logs)
+            # logs = {"loss": loss.detach().item() * arg_gradient_accumulation_steps, "lr": lr_scheduler.get_last_lr()[0]}
+            # progress_bar.set_postfix(**logs)
             if global_step >= arg_max_train_steps:
                 break
     logger.info("Training completed.")

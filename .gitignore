@@ -4,3 +4,4 @@ rgb2x/model_cache
 x2rgb/model_cache
 x2rgb_inpainting/model_cache
 venv/*
+x2rgb/night_with_normal_roughness_and_metallic.png

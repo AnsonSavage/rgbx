@@ -164,7 +164,7 @@ if __name__ == "__main__":
     # --- Model Parameter Arguments ---
     parser.add_argument("--prompt", type=str, required=True, help="Text prompt for generation")
     parser.add_argument("--seed", type=int, default=42, help="Random seed. Use -1 for a random seed.")
-    parser.add_argument("--inference_step", type=int, default=50, help="Number of inference steps")
+    parser.add_argument("--inference_step", type=int, default=100, help="Number of inference steps")
     parser.add_argument("--guidance_scale", type=float, default=7.5, help="Text guidance scale")
     parser.add_argument("--image_guidance_scale", type=float, default=1.5, help="Image guidance scale")
     

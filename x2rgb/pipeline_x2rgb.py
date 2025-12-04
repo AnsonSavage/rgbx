@@ -725,7 +725,7 @@ class StableDiffusionAOVDropoutPipeline(
         # For normal, the preprocessing does nothing
         # For others, the preprocessing remap the values to [-1, 1]
         preprocessed_aovs = {}
-        for aov_name in required_aovs:
+        for aov_name in required_aovs: # NOTE: Huh, so when an aov is not a required AOV, then it's not preprocessed? Is that a bug?
             if aov_name == "albedo":
                 if albedo is not None:
                     preprocessed_aovs[aov_name] = self.image_processor.preprocess(
@@ -737,7 +737,7 @@ class StableDiffusionAOVDropoutPipeline(
             if aov_name == "normal":
                 if normal is not None:
                     preprocessed_aovs[aov_name] = (
-                        self.image_processor.preprocess_normal(normal)
+                        self.image_processor.preprocess_normal(normal) # Note that normal is not normalized
                     )
                 else:
                     preprocessed_aovs[aov_name] = None
@@ -792,7 +792,7 @@ class StableDiffusionAOVDropoutPipeline(
             "roughness": 0.1680724853626448,
             "metallic": 0.13135013390855135,
         }
-        for aov_name, aov in preprocessed_aovs.items():
+        for aov_name, aov in preprocessed_aovs.items(): # NOTE: As far as I understand, this will always be the same length as required_aovs, and in the same order
             if aov is None:
                 image_latent = torch.zeros(
                     batch_size,
@@ -859,6 +859,7 @@ class StableDiffusionAOVDropoutPipeline(
 
         # 9. Denoising loop
         num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
+        import pdb; pdb.set_trace()
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
                 # Expand the latents if we are doing classifier free guidance.

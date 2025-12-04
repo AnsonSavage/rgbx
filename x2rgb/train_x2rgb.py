@@ -84,39 +84,78 @@ def parse_args():
         help="Number of updates steps to accumulate before performing a backward/update pass.",
     )
     parser.add_argument(
-        "--mixed_precision",
+        "--device",
         type=str,
-        default=None,
-        choices=["no", "fp16", "bf16"],
-        help=(
-            "Whether to use mixed precision. Choose between fp16 and bf16 (bfloat16). Bf16 requires PyTorch >="
-            " 1.10.and an Nvidia Ampere GPU."
-        ),
+        default="cuda" if torch.cuda.is_available() else "cpu",
+        help="Device (cuda or cpu) to train on.",
     )
     
     args = parser.parse_args()
     return args
 
+def find_latest_checkpoint(output_dir):
+    """Find the latest checkpoint-* directory in output_dir (diffusers format)."""
+    assert os.path.isdir(output_dir), f"{output_dir} is not a valid directory."
+
+    candidates = [d for d in os.listdir(output_dir) if d.startswith("checkpoint-") and os.path.isdir(os.path.join(output_dir, d))]
+    if not candidates:
+        return None
+
+    def key_fn(name):
+        try:
+            return int(name.split("checkpoint-")[-1])
+        except Exception:
+            return 0
+
+    candidates.sort(key=key_fn, reverse=True)
+    return os.path.join(output_dir, candidates[0])
+
 def main():
     args = parse_args()
-    
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # Extract args into local variables for easier navigation and usage
+    arg_pretrained_model_name_or_path = args.pretrained_model_name_or_path
+    arg_dataset_path = args.dataset_path
+    arg_output_dir = args.output_dir
+    arg_seed = args.seed
+    arg_train_batch_size = args.train_batch_size
+    arg_num_train_epochs = args.num_train_epochs
+    arg_max_train_steps = args.max_train_steps
+    arg_learning_rate = args.learning_rate
+    arg_lr_scheduler_name = args.lr_scheduler
+    arg_lr_warmup_steps = args.lr_warmup_steps
+    arg_gradient_accumulation_steps = args.gradient_accumulation_steps
+    arg_device = args.device
+
+    device = torch.device(arg_device)
     logger.info(f"Using device: {device}")
 
-    if args.seed is not None:
-        torch.manual_seed(args.seed)
+    # Ensure output dir exists
+    os.makedirs(arg_output_dir, exist_ok=True)
+
+    if arg_seed is not None:
+        torch.manual_seed(arg_seed)
         if torch.cuda.is_available():
-            torch.cuda.manual_seed_all(args.seed)
+            torch.cuda.manual_seed_all(arg_seed)
 
     # 1. Load Pipeline and Models
     # We load the full pipeline to get all components, then extract what we need for training
-    pipeline = StableDiffusionAOVDropoutPipeline.from_pretrained(args.pretrained_model_name_or_path)
+    pipeline = StableDiffusionAOVDropoutPipeline.from_pretrained(arg_pretrained_model_name_or_path, cache_dir = "./model_cache")
     
     vae = pipeline.vae
     text_encoder = pipeline.text_encoder
     tokenizer = pipeline.tokenizer
     unet = pipeline.unet
     noise_scheduler = DDPMScheduler.from_config(pipeline.scheduler.config)
+
+
+    # If there are prior training runs, load the UNet weights from the latest checkpoint
+    latest_checkpoint = find_latest_checkpoint(arg_output_dir)
+    if latest_checkpoint is not None:
+        unet_dir = os.path.join(latest_checkpoint, "unet")
+        logger.info(f"Found existing checkpoint at {latest_checkpoint}. Loading UNet from {unet_dir}.")
+        unet = unet.__class__.from_pretrained(unet_dir)
+        logger.info("UNet weights loaded from checkpoint.")
 
     # Freeze vae and text_encoder
     vae.requires_grad_(False)
@@ -131,37 +170,36 @@ def main():
     unet.to(device)
 
     # 2. Setup Dataset and Dataloader
-    # The dataset returns: ((albedo, roughness, metallic, normal), prompt), target_image
-    dataset = LightingFineTuneDataset(args.dataset_path, aov_types=['albedo', 'roughness', 'metallic', 'normal'])
+    # The dataset returns: ((albedo, normal, roughness, metallic), prompt), target_image
+    dataset = LightingFineTuneDataset(arg_dataset_path)
     
     def collate_fn(examples):
-        # examples is a list of tuples: [(((albedo, rough, metal, normal), prompt), target), ...]
+        # examples is a list of tuples: [(((albedo, normal, rough, metal), prompt), target), ...]
         
         target_images = []
         prompts = []
         aov_images = {
             "albedo": [],
+            "normal": [],
             "roughness": [],
-            "metallic": [],
-            "normal": []
+            "metallic": []
         }
 
         for (aovs, prompt), target in examples:
             target_images.append(target)
             prompts.append(prompt)
             
-            # aovs is a tuple (albedo, roughness, metallic, normal) corresponding to dataset.aov_types
+            # aovs is a tuple (albedo, normal, roughness, metallic) corresponding to dataset.aov_types
             aov_images["albedo"].append(aovs[0])
-            aov_images["roughness"].append(aovs[1])
-            aov_images["metallic"].append(aovs[2])
-            aov_images["normal"].append(aovs[3])
+            aov_images["normal"].append(aovs[1])
+            aov_images["roughness"].append(aovs[2])
+            aov_images["metallic"].append(aovs[3])
 
-        target_images = torch.stack(target_images)
-        target_images = target_images.to(memory_format=torch.contiguous_format).float()
-
-        # Stack AOVs
-        for k in aov_images:
-            aov_images[k] = torch.stack(aov_images[k]).to(memory_format=torch.contiguous_format).float()
+        target_images = torch.stack(target_images).float().contiguous()
+    
+        # Set value to be a stacked tensor
+        for key in aov_images:
+            aov_images[key] = torch.stack(aov_images[key]).to(memory_format=torch.contiguous_format).float()
 
         return {
             "target_images": target_images,
@@ -173,14 +211,14 @@ def main():
         dataset,
         shuffle=True,
         collate_fn=collate_fn,
-        batch_size=args.train_batch_size,
+        batch_size=arg_train_batch_size,
         num_workers=1,
     )
 
     # 3. Optimizer
     optimizer = torch.optim.AdamW(
         unet.parameters(),
-        lr=args.learning_rate,
+        lr=arg_learning_rate,
     )
 
     # Scaling factors from pipeline_x2rgb.py
@@ -192,24 +230,22 @@ def main():
     }
 
     # 5. Training Loop
-    num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
-    if args.max_train_steps is None:
-        args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
-    
+    num_update_steps_per_epoch = math.ceil(len(train_dataloader) / arg_gradient_accumulation_steps)
+    if arg_max_train_steps is None:
+        arg_max_train_steps = arg_num_train_epochs * num_update_steps_per_epoch
+
     lr_scheduler = get_scheduler(
-        args.lr_scheduler,
+        arg_lr_scheduler_name,
         optimizer=optimizer,
-        num_warmup_steps=args.lr_warmup_steps,
-        num_training_steps=args.max_train_steps,
+        num_warmup_steps=arg_lr_warmup_steps,
+        num_training_steps=arg_max_train_steps,
     )
 
     global_step = 0
-    progress_bar = tqdm(range(args.max_train_steps))
+    progress_bar = tqdm(range(arg_max_train_steps))
     progress_bar.set_description("Steps")
     
-    scaler = torch.cuda.amp.GradScaler(enabled=(args.mixed_precision == "fp16"))
-
-    for epoch in range(args.num_train_epochs):
+    for epoch in range(arg_num_train_epochs):
         for step, batch in enumerate(train_dataloader):
             
             # A. Encode Target Image (Ground Truth)
@@ -234,36 +270,37 @@ def main():
                 batch["prompts"], max_length=tokenizer.model_max_length, padding="max_length", truncation=True, return_tensors="pt"
             )
             with torch.no_grad():
-                encoder_hidden_states = text_encoder(inputs.input_ids.to(device))[0]
+                encoder_hidden_states = text_encoder(inputs.input_ids.to(device))[0] # Text embeddings
 
             # E. Prepare AOV Conditioning
             aov_latents_list = []
-            ordered_aov_keys = ["albedo", "roughness", "metallic"]
+            ordered_aov_keys = ["albedo", "normal", "roughness", "metallic"]
             
             with torch.no_grad():
                 for key in ordered_aov_keys:
                     aov_img = batch["aov_images"][key].to(device, dtype=torch.float32)
-                    aov_img = aov_img * 2.0 - 1.0
+                    if key != "normal": # TODO: Do you want to use the preprocess and preprocess_normal() methods of VAEImageProcessorAOV?
+                        aov_img = aov_img * 2.0 - 1.0
                     
-                    aov_latent = vae.encode(aov_img).latent_dist.mode()
+                    aov_latent = vae.encode(aov_img).latent_dist.mode() # If aov_img is [1, 3, 512, 512], aov_latent is [1, 4, 64, 64]
                     
                     aov_latent = aov_latent * SCALING_FACTORS[key]
                     aov_latents_list.append(aov_latent)
             
-            conditioning_latents = torch.cat(aov_latents_list, dim=1)
+            empty_irradiance_channel = torch.zeros((batch_size, 3, *aov_latents_list[0].shape[2:]), device=device)
+            aov_latents_list.append(empty_irradiance_channel) # Append empty irradiance channel
+            conditioning_latents = torch.cat(aov_latents_list, dim=1) # Size [batch_size, 4 x num_aovs, H/8, W/8]
             unet_input = torch.cat([noisy_latents, conditioning_latents], dim=1)
 
             # F. Predict Noise
-            with torch.cuda.amp.autocast(enabled=(args.mixed_precision == "fp16")):
-                model_pred = unet(unet_input, timesteps, encoder_hidden_states=encoder_hidden_states).sample
-                loss = F.mse_loss(model_pred.float(), noise.float(), reduction="mean")
-                loss = loss / args.gradient_accumulation_steps
+            model_pred = unet(unet_input, timesteps, encoder_hidden_states=encoder_hidden_states).sample
+            loss = F.mse_loss(model_pred.float(), noise.float())
+            loss = loss / arg_gradient_accumulation_steps
 
-            scaler.scale(loss).backward()
+            loss.backward()
             
-            if (step + 1) % args.gradient_accumulation_steps == 0:
-                scaler.step(optimizer)
-                scaler.update()
+            if (step + 1) % arg_gradient_accumulation_steps == 0:
+                optimizer.step()
                 
                 lr_scheduler.step()
                 optimizer.zero_grad()
@@ -272,21 +309,16 @@ def main():
                 global_step += 1
                 
                 if global_step % 500 == 0:
-                    save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
+                    save_path = os.path.join(arg_output_dir, f"checkpoint-{global_step}")
                     os.makedirs(save_path, exist_ok=True)
-                    pipeline.unet = unet
-                    pipeline.save_pretrained(save_path)
-                    logger.info(f"Saved state to {save_path}")
+                    unet.save_pretrained(save_path)
+                    logger.info(f"Saved UNet checkpoint to {save_path}")
 
-            logs = {"loss": loss.detach().item() * args.gradient_accumulation_steps, "lr": lr_scheduler.get_last_lr()[0]}
+            logs = {"loss": loss.detach().item() * arg_gradient_accumulation_steps, "lr": lr_scheduler.get_last_lr()[0]}
             progress_bar.set_postfix(**logs)
-
-            if global_step >= args.max_train_steps:
+            if global_step >= arg_max_train_steps:
                 break
-
-    pipeline.unet = unet
-    pipeline.save_pretrained(args.output_dir)
-    logger.info(f"Model saved to {args.output_dir}")
+    logger.info("Training completed.")
 
 if __name__ == "__main__":
     main()

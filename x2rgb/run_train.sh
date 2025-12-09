@@ -13,7 +13,7 @@
 
 # Dataset selection: choose which dataset type to use
 
-DATASET_TYPE="discrete"  # Options: "discrete" or "continuous"
+DATASET_TYPE="discrete"  # Options: "discrete" or "hdri"
 MODEL_NAME="zheng95z/x-to-rgb"
 OUTPUT_DIR="x2rgb-finetuned_${DATASET_TYPE}_with_velocity"
 export HF_HUB_OFFLINE=1

@@ -92,8 +92,14 @@ def parse_args():
     parser.add_argument(
         "--prob_prompt_dropout",
         type=float,
-        default=0.1,
+        default=0.3,
         help="Probability of dropping the prompt to enable Classifier-Free Guidance.",
+    )
+    parser.add_argument(
+        "--prob_intrinsic_dropout",
+        type=float,
+        default=0.3,
+        help="Probability of dropping the intrinsic AOVs to enable Classifier-Free Guidance.",
     )
     
     args = parser.parse_args()
@@ -133,6 +139,7 @@ def main():
     arg_gradient_accumulation_steps = args.gradient_accumulation_steps
     arg_device = args.device
     arg_prob_prompt_dropout = args.prob_prompt_dropout
+    arg_prob_intrinsic_dropout = args.prob_intrinsic_dropout
 
     device = torch.device(arg_device)
     logger.info(f"Using device: {device}")
@@ -296,9 +303,14 @@ def main():
                     if key != "normal": # TODO: Do you want to use the preprocess and preprocess_normal() methods of VAEImageProcessorAOV?
                         aov_img = aov_img * 2.0 - 1.0
                     
-                    aov_latent = vae.encode(aov_img).latent_dist.mode() # If aov_img is [1, 3, 512, 512], aov_latent is [1, 4, 64, 64]
-                    
-                    aov_latent = aov_latent * SCALING_FACTORS[key]
+                    if arg_prob_intrinsic_dropout > 0 and torch.rand(1).item() < arg_prob_intrinsic_dropout:
+                        # Drop this intrinsic AOV channel
+                        aov_latent = torch.zeros_like(noise)
+                    else:
+                        aov_latent = vae.encode(aov_img).latent_dist.mode() # If aov_img is [1, 3, 512, 512], aov_latent is [1, 4, 64, 64]
+                        aov_latent = aov_latent * SCALING_FACTORS[key]
+
+                    assert aov_latent.shape == noise.shape, f"AOV latent shape {aov_latent.shape} does not match noise shape {noise.shape}"
                     aov_latents_list.append(aov_latent)
             
             empty_irradiance_channel = torch.zeros((batch_size, 3, *aov_latents_list[0].shape[2:]), device=device)

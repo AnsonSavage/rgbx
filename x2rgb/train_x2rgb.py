@@ -89,6 +89,12 @@ def parse_args():
         default="cuda" if torch.cuda.is_available() else "cpu",
         help="Device (cuda or cpu) to train on.",
     )
+    parser.add_argument(
+        "--prob_prompt_dropout",
+        type=float,
+        default=0.1,
+        help="Probability of dropping the prompt to enable Classifier-Free Guidance.",
+    )
     
     args = parser.parse_args()
     return args
@@ -126,6 +132,7 @@ def main():
     arg_lr_warmup_steps = args.lr_warmup_steps
     arg_gradient_accumulation_steps = args.gradient_accumulation_steps
     arg_device = args.device
+    arg_prob_prompt_dropout = args.prob_prompt_dropout
 
     device = torch.device(arg_device)
     logger.info(f"Using device: {device}")
@@ -253,7 +260,7 @@ def main():
             
             with torch.no_grad():
                 # Scale images to [-1, 1]
-                latents = vae.encode(target_images.to(dtype=torch.float32) * 2.0 - 1.0).latent_dist.sample()
+                latents = vae.encode(target_images.to(dtype=torch.float32) * 2.0 - 1.0).latent_dist.sample() # TODO: Why sample() instead of mode here?
                 latents = latents * vae.config.scaling_factor
 
             # B. Sample Noise
@@ -266,11 +273,18 @@ def main():
             noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
             # D. Encode Prompts
-            inputs = tokenizer(
-                batch["prompts"], max_length=tokenizer.model_max_length, padding="max_length", truncation=True, return_tensors="pt"
+            prompts = batch["prompts"]
+            if arg_prob_prompt_dropout > 0:
+                prompts = [
+                    "" if torch.rand(1).item() < arg_prob_prompt_dropout else p 
+                    for p in prompts
+                ]
+
+            prompt_inputs = tokenizer(
+                prompts, max_length=tokenizer.model_max_length, padding="max_length", truncation=True, return_tensors="pt"
             )
             with torch.no_grad():
-                encoder_hidden_states = text_encoder(inputs.input_ids.to(device))[0] # Text embeddings
+                encoder_hidden_states = text_encoder(prompt_inputs.input_ids.to(device))[0] # Text embeddings
 
             # E. Prepare AOV Conditioning
             aov_latents_list = []

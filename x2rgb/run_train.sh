@@ -13,8 +13,9 @@
 
 # Dataset selection: choose which dataset type to use
 
+DATASET_TYPE="discrete"  # Options: "discrete" or "continuous"
 MODEL_NAME="zheng95z/x-to-rgb"
-OUTPUT_DIR="x2rgb-finetuned_${DATASET_TYPE}"
+OUTPUT_DIR="x2rgb-finetuned_${DATASET_TYPE}_with_velocity"
 export HF_HUB_OFFLINE=1
 
 # Absolute path to the conda environment created in this repo
@@ -31,7 +32,7 @@ cd /grphome/grp_cs_650_rgb_x/rgbx/x2rgb/
 # Then run via accelerate launch so it handles distributed setup automatically.
 accelerate launch train_x2rgb.py \
   --pretrained_model_name_or_path="$MODEL_NAME" \
-  --dataset_type="discrete" \
+  --dataset_type="$DATASET_TYPE" \
   --output_dir="$OUTPUT_DIR" \
   --train_batch_size=32 \
   --num_train_epochs=10 \

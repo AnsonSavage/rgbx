@@ -353,17 +353,17 @@ def main():
                     # Scale images to [-1, 1] using preprocess
                     target_images_processed = pipeline.image_processor.preprocess(target_images)
                     target_images_processed = target_images_processed.to(vae.device, dtype=vae.dtype)
-                    latents = vae.encode(target_images_processed.to(dtype=weight_dtype)).latent_dist.sample()
-                    latents = latents * vae.config.scaling_factor
+                    target_image_latents = vae.encode(target_images_processed.to(dtype=weight_dtype)).latent_dist.sample()
+                    target_image_latents = target_image_latents * vae.config.scaling_factor
 
                 # B. Sample Noise
-                noise = torch.randn_like(latents)
-                batch_size = latents.shape[0]
-                timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (batch_size,), device=latents.device)
+                noise = torch.randn_like(target_image_latents)
+                batch_size = target_image_latents.shape[0]
+                timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (batch_size,), device=target_image_latents.device)
                 timesteps = timesteps.long()
 
                 # C. Add Noise (Forward Diffusion)
-                noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
+                noisy_latents = noise_scheduler.add_noise(target_image_latents, noise, timesteps)
 
                 # D. Encode Prompts
                 prompts = batch["prompts"]
@@ -409,7 +409,12 @@ def main():
 
                 # F. Predict Noise
                 model_pred = unet(unet_input, timesteps, encoder_hidden_states=encoder_hidden_states).sample
-                loss = F.mse_loss(model_pred.float(), noise.float())
+                train_with_velocity = True
+                if train_with_velocity:
+                    target = noise_scheduler.get_velocity(target_image_latents, noise, timesteps)
+                else:
+                    target = noise
+                loss = F.mse_loss(model_pred.float(), target.float())
                 
                 accelerator.backward(loss)
                 

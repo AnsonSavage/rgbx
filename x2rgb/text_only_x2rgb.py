@@ -8,6 +8,8 @@ import numpy as np
 import torch
 from diffusers import DDIMScheduler
 from PIL import Image
+import json
+from datetime import datetime
 
 # --- Assumed local imports ---
 # These files (load_image.py, pipeline_x2rgb.py) 
@@ -154,7 +156,54 @@ def main(args):
     # Save using PIL
     pil_image = Image.fromarray(image_np)
     pil_image.save(args.output_path)
-    
+    # Write metadata JSON next to output image to link parameters to results
+    def _shape_of(img):
+        if img is None:
+            return None
+        try:
+            # torch tensor
+            if hasattr(img, 'shape'):
+                return [int(x) for x in img.shape]
+        except Exception:
+            pass
+        try:
+            # numpy array
+            return list(img.shape)
+        except Exception:
+            return None
+
+    metadata = {
+        "created_at": datetime.now().isoformat() + "Z",
+        "prompt": args.prompt,
+        "seed": int(args.seed),
+        "device": device,
+        "model_id": "zheng95z/x-to-rgb",
+        "unet_checkpoint": args.unet_checkpoint,
+        "inference_step": args.inference_step,
+        "guidance_scale": args.guidance_scale,
+        "image_guidance_scale": args.image_guidance_scale,
+        "cache_dir": args.cache_dir,
+        "height": int(height),
+        "width": int(width),
+        "aovs": {
+            "albedo": {"path": args.albedo, "shape": _shape_of(albedo_image)},
+            "normal": {"path": args.normal, "shape": _shape_of(normal_image)},
+            "roughness": {"path": args.roughness, "shape": _shape_of(roughness_image)},
+            "metallic": {"path": args.metallic, "shape": _shape_of(metallic_image)},
+            "irradiance": {"path": args.irradiance, "shape": _shape_of(irradiance_image)},
+        },
+        "output_image": args.output_path,
+    }
+
+    try:
+        base, _ = os.path.splitext(args.output_path)
+        json_path = base + ".json"
+        with open(json_path, 'w') as f:
+            json.dump(metadata, f, indent=2)
+        print(f"Wrote metadata to {json_path}")
+    except Exception as e:
+        print(f"Warning: failed to write metadata JSON: {e}")
+
     print("Done.")
 
 

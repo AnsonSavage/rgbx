@@ -1,31 +1,39 @@
 #!/bin/bash
 
-#SBATCH --time=5:00:00   # walltime
-#SBATCH --ntasks=1   # number of processor cores (i.e. tasks)
-#SBATCH --nodes=1   # number of nodes
-#SBATCH --gpus=1     # <--- UPDATE THIS TO MATCH THE NUMBER OF GPUS YOU WANT TO USE (e.g. --gpus=2)
+#SBATCH --time=10:00:00   # walltime
+#SBATCH --ntasks=16        # number of tasks (processes)
+#SBATCH --nodes=1         # number of nodes
+#SBATCH --gpus=1          # <-- update this to match the number of GPUs you want (e.g. --gpus=2)
 #SBATCH --mem-per-cpu=32768M   # memory per CPU core
 #SBATCH --qos=cs
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=ansonsav@byu.edu
 
-# Example script to run training for x2rgb
+# Example script to run training for x2rgb using Hugging Face Accelerate
 
-# Set the dataset path
-DATASET_PATH="/grphome/grp_cs_650_rgb_x/nobackup/autodelete/blender_aov_dataset/aov_test_05"
+# Dataset selection: choose which dataset type to use
+
 MODEL_NAME="zheng95z/x-to-rgb"
-OUTPUT_DIR="x2rgb-finetuned_prompt_dropout"
+OUTPUT_DIR="x2rgb-finetuned_${DATASET_TYPE}"
 export HF_HUB_OFFLINE=1
 
-# Run training
+# Absolute path to the conda environment created in this repo
+CONDA_ENV_PATH="/grphome/grp_cs_650_rgb_x/conda_env"
+conda activate "${CONDA_ENV_PATH}"
+
+# Move to training directory
 cd /grphome/grp_cs_650_rgb_x/rgbx/x2rgb/
-/grphome/grp_cs_650_rgb_x/conda_env/bin/python3 train_x2rgb.py \
-  --pretrained_model_name_or_path=$MODEL_NAME \
-  --dataset_path=$DATASET_PATH \
-  --output_dir=$OUTPUT_DIR \
+
+# Use accelerate to launch multi-GPU training. accelerate will detect available GPUs.
+# If you want to force a specific number of processes, add: --num_processes <N>
+
+# Recommended: configure accelerate once interactively on the machine with `accelerate config`
+# Then run via accelerate launch so it handles distributed setup automatically.
+accelerate launch train_x2rgb.py \
+  --pretrained_model_name_or_path="$MODEL_NAME" \
+  --dataset_type="discrete" \
+  --output_dir="$OUTPUT_DIR" \
   --train_batch_size=32 \
   --num_train_epochs=10 \
   --learning_rate=1e-6 \
-  --prob_prompt_dropout=0.1 \
-  # --gradient_accumulation_steps=1 \
-  # --device="cpu"
+  --prob_prompt_dropout=0.1

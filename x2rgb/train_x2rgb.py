@@ -320,17 +320,21 @@ def main():
         "metallic": 0.13135013390855135,
     }
 
-    # 5. Training Loop
-    # We divide by num_processes because the dataloader will be split across GPUs
-    num_update_steps_per_epoch = math.ceil(len(train_dataloader) / accelerator.num_processes / arg_gradient_accumulation_steps) # TODO: IDK if I should divide by num_processes here, but oh well
+    # See https://github.com/huggingface/diffusers/commit/a1cfb0acccbfcbc70b83ca379594fe854a8df24b
+    num_warmup_steps_for_scheduler = arg_lr_warmup_steps * accelerator.num_processes
     if arg_max_train_steps is None:
-        arg_max_train_steps = arg_num_train_epochs * num_update_steps_per_epoch
+        # We divide by num_processes because the dataloader will be split across GPUs
+        len_train_dataloader_after_sharding = math.ceil(len(train_dataloader) / accelerator.num_processes)
+        num_update_steps_per_epoch = math.ceil(len_train_dataloader_after_sharding / arg_gradient_accumulation_steps)
+        num_training_steps_for_scheduler = arg_num_train_epochs * num_update_steps_per_epoch * accelerator.num_processes
+    else:
+        num_training_steps_for_scheduler = arg_max_train_steps * accelerator.num_processes
 
     lr_scheduler = get_scheduler(
         arg_lr_scheduler_name,
         optimizer=optimizer,
-        num_warmup_steps=arg_lr_warmup_steps * arg_gradient_accumulation_steps,
-        num_training_steps=arg_max_train_steps * arg_gradient_accumulation_steps,
+        num_warmup_steps=num_warmup_steps_for_scheduler,
+        num_training_steps=num_training_steps_for_scheduler,
     )
 
     # Prepare with accelerator
@@ -338,11 +342,24 @@ def main():
         unet, optimizer, train_dataloader, lr_scheduler
     )
     
+     # We need to recalculate our total training steps as the size of the training dataloader may have changed.
+    num_update_steps_per_epoch = math.ceil(len(train_dataloader) / arg_gradient_accumulation_steps)
+    if arg_max_train_steps is None:
+        arg_max_train_steps = arg_num_train_epochs * num_update_steps_per_epoch
+        if num_training_steps_for_scheduler != arg_max_train_steps * accelerator.num_processes:
+            logger.warning(
+                f"The length of the 'train_dataloader' after 'accelerator.prepare' ({len(train_dataloader)}) does not match "
+                f"the expected length ({len_train_dataloader_after_sharding}) when the learning rate scheduler was created. "
+                f"This inconsistency may result in the learning rate scheduler not functioning properly."
+            )
+    # Afterwards we recalculate our number of training epochs
+    arg_num_train_epochs = math.ceil(arg_max_train_steps / num_update_steps_per_epoch)
 
     global_step = 0
     progress_bar = tqdm(range(arg_max_train_steps), disable=not accelerator.is_local_main_process)
     progress_bar.set_description("Steps")
     
+    # 5. Training Loop
     for epoch in range(arg_num_train_epochs):
         for step, batch in enumerate(train_dataloader):
             with accelerator.accumulate(unet):
@@ -359,7 +376,7 @@ def main():
                 # B. Sample Noise
                 noise = torch.randn_like(target_image_latents)
                 batch_size = target_image_latents.shape[0]
-                timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (batch_size,), device=target_image_latents.device)
+                timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (batch_size,), device=target_image_latents.device) # TODO: Where does config.num_train_timesteps come from?
                 timesteps = timesteps.long()
 
                 # C. Add Noise (Forward Diffusion)

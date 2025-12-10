@@ -10,6 +10,7 @@ from diffusers import DDIMScheduler
 from PIL import Image
 import json
 from datetime import datetime
+import re
 
 # --- Assumed local imports ---
 # These files (load_image.py, pipeline_x2rgb.py) 
@@ -29,7 +30,7 @@ def get_default_device():
     return "cpu"
 
 
-def load_aov_image(filepath, aov_type, device):
+def load_aov_image(filepath: str, aov_type: str, device):
     """
     Loads and preprocesses a single AOV image based on its type and file extension.
     This logic is extracted directly from your original callback.
@@ -125,12 +126,38 @@ def main(args):
     print(f"Using seed: {args.seed}")
     generator = torch.Generator(device=device).manual_seed(args.seed)
 
-    # 5. Run inference
+    # 5. Run inference (supports single prompt or batch from args._prompts)
     print("Running inference...")
     required_aovs = ["albedo", "normal", "roughness", "metallic", "irradiance"]
-    
-    generated_image = pipe(
-        prompt=args.prompt,
+
+    prompts = getattr(args, '_prompts', [args.prompt])
+
+    # Helper to sanitize prompt into file-safe label
+    def _sanitize_prompt(p):
+        s = re.sub(r'[^A-Za-z0-9._-]', '_', p)
+        return s[:120]
+
+    def _shape_of(img):
+        if img is None:
+            return None
+        try:
+            if hasattr(img, 'shape'):
+                return [int(x) for x in img.shape]
+        except Exception:
+            pass
+        try:
+            return list(img.shape)
+        except Exception:
+            return None
+
+    # Ensure output directory when needed
+    out_dir = args.output_dir or "./outputs"
+    if not os.path.exists(out_dir):
+        os.makedirs(out_dir, exist_ok=True)
+
+    # Run the pipeline once with the list of prompts (handles single-item lists too)
+    result = pipe(
+        prompt=prompts,
         albedo=albedo_image,
         normal=normal_image,
         roughness=roughness_image,
@@ -145,64 +172,64 @@ def main(args):
         image_guidance_scale=args.image_guidance_scale,
         guidance_rescale=0.7,
         output_type="np",
-    ).images[0] # Get the first (and only) image
+    )
 
-    # 6. Save output
-    print(f"Saving output to {args.output_path}...")
-    
-    # Convert from float [0.0, 1.0] to uint8 [0, 255]
-    image_np = (np.clip(generated_image, 0.0, 1.0) * 255).astype(np.uint8)
-    
-    # Save using PIL
-    pil_image = Image.fromarray(image_np)
-    pil_image.save(args.output_path)
-    # Write metadata JSON next to output image to link parameters to results
-    def _shape_of(img):
-        if img is None:
-            return None
+    images = result.images
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    # Build output paths: if a single prompt and --output_path given, use it; otherwise generate names
+    out_paths = []
+    if len(prompts) == 1 and args.output_path:
+        out_paths = [args.output_path]
+    else:
+        for i, prompt_text in enumerate(prompts):
+            label = _sanitize_prompt(prompt_text)
+            fname = f"out_{label}_{timestamp}_{i}.png"
+            out_paths.append(os.path.join(out_dir, fname))
+
+    # Save images and metadata
+    for i, (prompt_text, img_np, out_path) in enumerate(zip(prompts, images, out_paths)):
+        print(f"Saving output for prompt #{i} to {out_path}")
+        img_u8 = (np.clip(img_np, 0.0, 1.0) * 255).astype(np.uint8)
+        Image.fromarray(img_u8).save(out_path)
+
+        metadata = {
+            "created_at": datetime.now().isoformat() + "Z",
+            "prompt": prompt_text,
+            "seed": int(args.seed),
+            "device": device,
+            "model_id": "zheng95z/x-to-rgb",
+            "unet_checkpoint": args.unet_checkpoint,
+            "inference_step": args.inference_step,
+            "guidance_scale": args.guidance_scale,
+            "image_guidance_scale": args.image_guidance_scale,
+            "cache_dir": args.cache_dir,
+            "height": int(height),
+            "width": int(width),
+            "aovs": {
+                "albedo": {"path": args.albedo, "shape": _shape_of(albedo_image)},
+                "normal": {"path": args.normal, "shape": _shape_of(normal_image)},
+                "roughness": {"path": args.roughness, "shape": _shape_of(roughness_image)},
+                "metallic": {"path": args.metallic, "shape": _shape_of(metallic_image)},
+                "irradiance": {"path": args.irradiance, "shape": _shape_of(irradiance_image)},
+            },
+            "output_image": out_path,
+        }
+
         try:
-            # torch tensor
-            if hasattr(img, 'shape'):
-                return [int(x) for x in img.shape]
-        except Exception:
-            pass
-        try:
-            # numpy array
-            return list(img.shape)
-        except Exception:
-            return None
-
-    metadata = {
-        "created_at": datetime.now().isoformat() + "Z",
-        "prompt": args.prompt,
-        "seed": int(args.seed),
-        "device": device,
-        "model_id": "zheng95z/x-to-rgb",
-        "unet_checkpoint": args.unet_checkpoint,
-        "inference_step": args.inference_step,
-        "guidance_scale": args.guidance_scale,
-        "image_guidance_scale": args.image_guidance_scale,
-        "cache_dir": args.cache_dir,
-        "height": int(height),
-        "width": int(width),
-        "aovs": {
-            "albedo": {"path": args.albedo, "shape": _shape_of(albedo_image)},
-            "normal": {"path": args.normal, "shape": _shape_of(normal_image)},
-            "roughness": {"path": args.roughness, "shape": _shape_of(roughness_image)},
-            "metallic": {"path": args.metallic, "shape": _shape_of(metallic_image)},
-            "irradiance": {"path": args.irradiance, "shape": _shape_of(irradiance_image)},
-        },
-        "output_image": args.output_path,
-    }
-
-    try:
-        base, _ = os.path.splitext(args.output_path)
-        json_path = base + ".json"
-        with open(json_path, 'w') as f:
-            json.dump(metadata, f, indent=2)
-        print(f"Wrote metadata to {json_path}")
-    except Exception as e:
-        print(f"Warning: failed to write metadata JSON: {e}")
+            # add subdirectory and filename
+            subdir_name = 'metadata'
+            parent_dir = os.path.dirname(out_path)
+            metadata_dir = os.path.join(parent_dir, subdir_name)
+            os.makedirs(metadata_dir, exist_ok=True)
+            base, _ = os.path.splitext(out_path)
+            json_path = base + ".json"
+            final_path = os.path.join(metadata_dir, os.path.basename(json_path))
+            with open(final_path, 'w') as f:
+                json.dump(metadata, f, indent=2)
+            print(f"Wrote metadata to {final_path}")
+        except Exception as e:
+            print(f"Warning: failed to write metadata JSON: {e}")
 
     print("Done.")
 
@@ -216,10 +243,11 @@ if __name__ == "__main__":
     parser.add_argument("--roughness", type=str, default=None, help="Path to roughness image (.exr, .png, .jpg)")
     parser.add_argument("--metallic", type=str, default=None, help="Path to metallic image (.exr, .png, .jpg)")
     parser.add_argument("--irradiance", type=str, default=None, help="Path to irradiance image (.exr, .png, .jpg)")
-    parser.add_argument("--output_path", type=str, required=True, help="Path to save the output image (e.g., output.png)")
+    parser.add_argument("--prompts_file", type=str, default=None, help="Path to a text file with one prompt per line (optional batch mode)")
+    parser.add_argument("--output_dir", type=str, default="./outputs", help="Directory to save outputs (default: ./outputs)")
     
     # --- Model Parameter Arguments ---
-    parser.add_argument("--prompt", type=str, required=True, help="Text prompt for generation")
+    parser.add_argument("--prompt", type=str, required=False, default=None, help="Text prompt for generation")
     parser.add_argument("--seed", type=int, default=42, help="Random seed. Use -1 for a random seed.")
     parser.add_argument("--inference_step", type=int, default=100, help="Number of inference steps")
     parser.add_argument("--guidance_scale", type=float, default=7.5, help="Text guidance scale")
@@ -231,4 +259,29 @@ if __name__ == "__main__":
     parser.add_argument("--device", type=str, default=None, help="Device to use for inference (e.g., 'cuda', 'cpu'). If not provided, defaults to CUDA if available, otherwise CPU.")
 
     args = parser.parse_args()
+    # If a prompts file is provided, it takes precedence over single --prompt
+    if args.prompts_file and args.prompt:
+        # Allow both but prefer file; warn user
+        print("Note: both --prompt and --prompts_file provided — using --prompts_file")
+
+    # Read prompts list
+    prompts = None
+    if args.prompts_file:
+        if not os.path.exists(args.prompts_file):
+            raise FileNotFoundError(f"Prompts file not found: {args.prompts_file}")
+        with open(args.prompts_file, 'r') as pf:
+            lines = [l.strip() for l in pf.readlines()]
+            # filter out empty lines
+            prompts = [l for l in lines if l]
+        if len(prompts) == 0:
+            raise ValueError(f"No prompts found in {args.prompts_file}")
+    else:
+        # fallback to single prompt
+        if not args.prompt:
+            raise ValueError("Either --prompt or --prompts_file must be provided")
+        prompts = [args.prompt]
+
+    # attach prompts to args for main
+    args._prompts = prompts
+
     main(args)

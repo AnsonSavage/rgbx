@@ -11,3 +11,4 @@ x2rgb/outputs/*
 **/checkpoint*/**
 *.out
 x2rgb/*.png
+x2rgb/outputs*/**

@@ -45,7 +45,7 @@ def load_aov_image(filepath: str, aov_type: str, device):
         if aov_type == 'normal':
             return load_exr_image(filepath, normalize=True).to(device)
         if aov_type == 'irradiance':
-            return load_exr_image(filepath, tonemaping=True, clamp=True).to(device)
+            return load_exr_image(filepath, tonemapping=True, clamp=True).to(device)
         # albedo, roughness, metallic
         return load_exr_image(filepath, clamp=True).to(device)
     

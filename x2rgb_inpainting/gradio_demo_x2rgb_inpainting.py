@@ -90,7 +90,7 @@ def get_x2rgb_demo():
             irradiance_image = None
         elif irradiance.name.endswith(".exr"):
             irradiance_image = load_exr_image(
-                irradiance.name, tonemaping=True, clamp=True
+                irradiance.name, tonemapping=True, clamp=True
             ).to("cuda")
         elif (
             irradiance.name.endswith(".png")
@@ -128,7 +128,7 @@ def get_x2rgb_demo():
         mask = 1.0 - mask
 
         if photo.name.endswith(".exr"):
-            photo = load_exr_image(photo.name, tonemaping=True, clamp=True).to("cuda")
+            photo = load_exr_image(photo.name, tonemapping=True, clamp=True).to("cuda")
         elif (
             photo.name.endswith(".png")
             or photo.name.endswith(".jpg")

@@ -29,7 +29,7 @@ from transformers import CLIPTextModel, CLIPTokenizer
 logger = logging.get_logger(__name__)
 
 
-class VaeImageProcrssorAOV(VaeImageProcessor):
+class VaeImageProcessorAOV(VaeImageProcessor):
     """
     Image processor for VAE AOV.
 
@@ -181,7 +181,7 @@ class StableDiffusionAOVMatEstPipeline(
             scheduler=scheduler,
         )
         self.vae_scale_factor = 2 ** (len(self.vae.config.block_out_channels) - 1)
-        self.image_processor = VaeImageProcrssorAOV(
+        self.image_processor = VaeImageProcessorAOV(
             vae_scale_factor=self.vae_scale_factor
         )
         self.register_to_config()

@@ -35,7 +35,7 @@ def get_rgb2x_demo():
         generator = torch.Generator(device="cuda").manual_seed(seed)
 
         if photo.name.endswith(".exr"):
-            photo = load_exr_image(photo.name, tonemaping=True, clamp=True).to("cuda")
+            photo = load_exr_image(photo.name, tonemapping=True, clamp=True).to("cuda")
         elif (
             photo.name.endswith(".png")
             or photo.name.endswith(".jpg")

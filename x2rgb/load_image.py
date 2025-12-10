@@ -95,11 +95,11 @@ def load_ldr_image(image_path, from_srgb=False, clamp=False, normalize=False):
     return image.permute(2, 0, 1)  # returns (c, h, w)
 
 
-def load_exr_image(image_path, tonemaping=False, clamp=False, normalize=False):
+def load_exr_image(image_path, tonemapping=False, clamp=False, normalize=False):
     image = cv2.cvtColor(cv2.imread(image_path, -1), cv2.COLOR_BGR2RGB)
     image = torch.from_numpy(image.astype("float32"))  # (h, w, c)
     image[~torch.isfinite(image)] = 0
-    if tonemaping:
+    if tonemapping:
         # Exposure adjuestment
         image_Yxy = convert_rgb_2_Yxy(image)
         lum = (

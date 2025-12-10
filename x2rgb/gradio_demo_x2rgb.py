@@ -8,6 +8,7 @@ import torch
 from diffusers import DDIMScheduler
 from load_image import load_exr_image, load_ldr_image
 from pipeline_x2rgb import StableDiffusionAOVDropoutPipeline
+from aov_utils import load_aov_image
 
 current_directory = os.path.dirname(os.path.abspath(__file__))
 
@@ -39,64 +40,11 @@ def get_x2rgb_demo():
         guidance_scale,
         image_guidance_scale,
     ):
-        if albedo is None:
-            albedo_image = None
-        elif albedo.name.endswith(".exr"):
-            albedo_image = load_exr_image(albedo.name, clamp=True).to("cuda")
-        elif (
-            albedo.name.endswith(".png")
-            or albedo.name.endswith(".jpg")
-            or albedo.name.endswith(".jpeg")
-        ):
-            albedo_image = load_ldr_image(albedo.name, from_srgb=True).to("cuda")
-
-        if normal is None:
-            normal_image = None
-        elif normal.name.endswith(".exr"):
-            normal_image = load_exr_image(normal.name, normalize=True).to("cuda")
-        elif (
-            normal.name.endswith(".png")
-            or normal.name.endswith(".jpg")
-            or normal.name.endswith(".jpeg")
-        ):
-            normal_image = load_ldr_image(normal.name, normalize=True).to("cuda")
-
-        if roughness is None:
-            roughness_image = None
-        elif roughness.name.endswith(".exr"):
-            roughness_image = load_exr_image(roughness.name, clamp=True).to("cuda")
-        elif (
-            roughness.name.endswith(".png")
-            or roughness.name.endswith(".jpg")
-            or roughness.name.endswith(".jpeg")
-        ):
-            roughness_image = load_ldr_image(roughness.name, clamp=True).to("cuda")
-
-        if metallic is None:
-            metallic_image = None
-        elif metallic.name.endswith(".exr"):
-            metallic_image = load_exr_image(metallic.name, clamp=True).to("cuda")
-        elif (
-            metallic.name.endswith(".png")
-            or metallic.name.endswith(".jpg")
-            or metallic.name.endswith(".jpeg")
-        ):
-            metallic_image = load_ldr_image(metallic.name, clamp=True).to("cuda")
-
-        if irradiance is None:
-            irradiance_image = None
-        elif irradiance.name.endswith(".exr"):
-            irradiance_image = load_exr_image(
-                irradiance.name, tonemapping=True, clamp=True
-            ).to("cuda")
-        elif (
-            irradiance.name.endswith(".png")
-            or irradiance.name.endswith(".jpg")
-            or irradiance.name.endswith(".jpeg")
-        ):
-            irradiance_image = load_ldr_image(
-                irradiance.name, from_srgb=True, clamp=True
-            ).to("cuda")
+        albedo_image = load_aov_image(albedo, 'albedo', 'cuda')
+        normal_image = load_aov_image(normal, 'normal', 'cuda')
+        roughness_image = load_aov_image(roughness, 'roughness', 'cuda')
+        metallic_image = load_aov_image(metallic, 'metallic', 'cuda')
+        irradiance_image = load_aov_image(irradiance, 'irradiance', 'cuda')
 
         generator = torch.Generator(device="cuda").manual_seed(seed)
 

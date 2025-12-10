@@ -264,8 +264,8 @@ def main():
     # 2. Setup Dataset and Dataloader
     # The dataset returns: ((albedo, normal, roughness, metallic), prompt), target_image
     dataset = create_dataset(arg_dataset_type, arg_dataset_path)
-    def collate_fn(examples):
-        # examples is a list of tuples: [(((albedo, normal, rough, metal), prompt), target), ...]
+    def collate_fn(dataset_samples):
+        # dataset_samples is a list of tuples: [(((albedo, normal, roughness, metal), prompt), target), ...]
         
         target_images = []
         prompts = []
@@ -276,7 +276,7 @@ def main():
             "metallic": []
         }
 
-        for (aovs, prompt), target in examples:
+        for (aovs, prompt), target in dataset_samples:
             target_images.append(target)
             prompts.append(prompt)
             

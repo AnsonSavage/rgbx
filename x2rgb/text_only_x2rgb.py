@@ -15,8 +15,8 @@ import re
 # --- Assumed local imports ---
 # These files (load_image.py, pipeline_x2rgb.py) 
 # must be in the same directory.
-from load_image import load_exr_image, load_ldr_image
 from pipeline_x2rgb import StableDiffusionAOVDropoutPipeline
+from aov_utils import load_aov_image
 # -------------------------------
 
 
@@ -29,39 +29,6 @@ def get_default_device():
         return "cuda"
     return "cpu"
 
-
-def load_aov_image(filepath: str, aov_type: str, device):
-    """
-    Loads and preprocesses a single AOV image based on its type and file extension.
-    This logic is extracted directly from your original callback.
-    """
-    if filepath is None or not os.path.exists(filepath):
-        if filepath:
-            print(f"Warning: File not found, skipping: {filepath}")
-        return None
-
-    print(f"Loading {aov_type}: {filepath}")
-    if filepath.endswith(".exr"):
-        if aov_type == 'normal':
-            return load_exr_image(filepath, normalize=True).to(device)
-        if aov_type == 'irradiance':
-            return load_exr_image(filepath, tonemapping=True, clamp=True).to(device)
-        # albedo, roughness, metallic
-        return load_exr_image(filepath, clamp=True).to(device)
-    
-    elif filepath.endswith((".png", ".jpg", ".jpeg")):
-        if aov_type == 'normal':
-            return load_ldr_image(filepath, normalize=True).to(device)
-        if aov_type == 'albedo':
-            return load_ldr_image(filepath, from_srgb=True).to(device)
-        if aov_type == 'irradiance':
-            return load_ldr_image(filepath, from_srgb=True, clamp=True).to(device)
-        # roughness, metallic
-        return load_ldr_image(filepath, clamp=True).to(device)
-    
-    else:
-        print(f"Warning: Unsupported file type, skipping: {filepath}")
-        return None
 
 def main(args):
     """
@@ -95,10 +62,20 @@ def main(args):
 
     # 2. Load all AOV images
     print("Loading AOV images...")
+    if args.albedo:
+        print(f"Loading albedo: {args.albedo}")
     albedo_image = load_aov_image(args.albedo, 'albedo', device)
+    if args.normal:
+        print(f"Loading normal: {args.normal}")
     normal_image = load_aov_image(args.normal, 'normal', device)
+    if args.roughness:
+        print(f"Loading roughness: {args.roughness}")
     roughness_image = load_aov_image(args.roughness, 'roughness', device)
+    if args.metallic:
+        print(f"Loading metallic: {args.metallic}")
     metallic_image = load_aov_image(args.metallic, 'metallic', device)
+    if args.irradiance:
+        print(f"Loading irradiance: {args.irradiance}")
     irradiance_image = load_aov_image(args.irradiance, 'irradiance', device)
 
     # 3. Determine height/width

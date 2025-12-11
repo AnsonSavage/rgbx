@@ -164,6 +164,22 @@ def parse_args():
             "and an Nvidia Ampere GPU."
         ),
     )
+    parser.add_argument(
+        "--resume_from_checkpoint",
+        type=str,
+        default="latest",
+        help=(
+            "Whether training should be resumed from a previous checkpoint. Use 'latest' to automatically "
+            "find the latest checkpoint in output_dir. Otherwise, specify a path to a specific checkpoint directory. "
+            "Set to 'none' to start fresh and ignore existing checkpoints."
+        ),
+    )
+    parser.add_argument(
+        "--checkpointing_steps",
+        type=int,
+        default=100,
+        help="Save a checkpoint of the training state every X update steps.",
+    )
     
     args = parser.parse_args()
     return args
@@ -244,14 +260,6 @@ def main():
     unet = pipeline.unet
     noise_scheduler = DDPMScheduler.from_config(pipeline.scheduler.config)
 
-
-    # If there are prior training runs, load the UNet weights from the latest checkpoint
-    latest_checkpoint = find_latest_checkpoint(arg_output_dir)
-    if latest_checkpoint is not None:
-        unet_dir = os.path.join(latest_checkpoint, "unet")
-        logger.info(f"Found existing checkpoint at {latest_checkpoint}. Loading UNet from {unet_dir}.")
-        unet = unet.__class__.from_pretrained(unet_dir)
-        logger.info("UNet weights loaded from checkpoint.")
 
     # Freeze vae and text_encoder
     vae.requires_grad_(False)
@@ -366,13 +374,53 @@ def main():
     # Afterwards we recalculate our number of training epochs
     arg_num_train_epochs = math.ceil(arg_max_train_steps / num_update_steps_per_epoch)
 
+    # Determine checkpoint to resume from
+    resume_from_checkpoint = args.resume_from_checkpoint
+    if resume_from_checkpoint == "none":
+        resume_from_checkpoint = None
+    elif resume_from_checkpoint == "latest":
+        # Try to find the latest checkpoint
+        if os.path.isdir(arg_output_dir):
+            resume_from_checkpoint = find_latest_checkpoint(arg_output_dir)
+        else:
+            resume_from_checkpoint = None
+    elif resume_from_checkpoint is not None and not os.path.isdir(resume_from_checkpoint):
+        logger.warning(f"Checkpoint path {resume_from_checkpoint} does not exist. Starting from scratch.")
+        resume_from_checkpoint = None
+
+    # Calculate starting epoch and step if resuming
     global_step = 0
-    progress_bar = tqdm(range(arg_max_train_steps), disable=not accelerator.is_local_main_process)
+    first_epoch = 0
+    if resume_from_checkpoint:
+        logger.info(f"Resuming from checkpoint: {resume_from_checkpoint}")
+        accelerator.load_state(resume_from_checkpoint)
+        # Extract the step number from checkpoint directory name
+        path = os.path.basename(resume_from_checkpoint)
+        training_difference = os.path.splitext(path)[0]
+        try:
+            global_step = int(training_difference.replace("checkpoint-", ""))
+        except ValueError:
+            global_step = 0
+        
+        # Calculate which epoch and step within epoch to resume from
+        first_epoch = global_step // num_update_steps_per_epoch
+        resume_step = global_step % num_update_steps_per_epoch
+        logger.info(f"Resuming training from global_step {global_step}, epoch {first_epoch}, step {resume_step}")
+    else:
+        resume_step = 0
+
+    progress_bar = tqdm(range(global_step, arg_max_train_steps), initial=global_step, total=arg_max_train_steps, disable=not accelerator.is_local_main_process)
     progress_bar.set_description("Steps")
     
     # 5. Training Loop
-    for epoch in range(arg_num_train_epochs):
+    for epoch in range(first_epoch, arg_num_train_epochs):
         for step, batch in enumerate(train_dataloader):
+            # Skip steps that were already completed when resuming
+            if resume_from_checkpoint and epoch == first_epoch and step < resume_step:
+                if step % 100 == 0:
+                    progress_bar.set_description(f"Skipping step {step}/{resume_step}")
+                continue
+            
             with accelerator.accumulate(unet):
                 # A. Encode Target Image (Ground Truth)
                 target_images = batch["target_images"]
@@ -454,13 +502,17 @@ def main():
                 progress_bar.update(1)
                 global_step += 1
                 
-                if global_step % 50 == 0:
+                if global_step % args.checkpointing_steps == 0:
                     if accelerator.is_main_process:
                         save_path = os.path.join(arg_output_dir, f"checkpoint-{global_step}")
-                        os.makedirs(save_path, exist_ok=True)
+                        # Save full accelerator state for resumability (includes optimizer, scheduler, RNG states)
+                        accelerator.save_state(save_path)
+                        # Also save UNet in diffusers format for inference
+                        unet_save_path = os.path.join(save_path, "unet")
+                        os.makedirs(unet_save_path, exist_ok=True)
                         unwrap_model = accelerator.unwrap_model(unet)
-                        unwrap_model.save_pretrained(save_path)
-                        logger.info(f"Saved UNet checkpoint to {save_path}")
+                        unwrap_model.save_pretrained(unet_save_path)
+                        logger.info(f"Saved checkpoint to {save_path}")
 
             logs = {"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
             progress_bar.set_postfix(**logs)

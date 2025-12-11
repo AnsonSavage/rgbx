@@ -29,8 +29,11 @@ class BaseAOVDataset(Dataset, ABC):
         for aov_type in self.aov_types:
             aov_path = self._get_path_to_aov(target_image_path, aov_type)
             if aov_path is not None:
-                assert os.path.exists(aov_path), f"AOV path does not exist: {aov_path}"
-                aov_image = load_aov_image(aov_path, aov_type, device='cpu')
+                if not os.path.exists(aov_path):
+                    print(f"Warning: AOV path does not exist: {aov_path}, setting AOV to none", flush=True)
+                    aov_image = None
+                else:
+                    aov_image = load_aov_image(aov_path, aov_type, device='cpu')
             else:
                 aov_image = None # TODO: is this okay, or should we do a zero tensor here?
             aov_images.append(aov_image)

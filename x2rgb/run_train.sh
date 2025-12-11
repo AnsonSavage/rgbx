@@ -1,11 +1,11 @@
 #!/bin/bash
 
-#SBATCH --time=10:00:00   # walltime
+#SBATCH --time=8:00:00   # walltime
 #SBATCH --ntasks=16        # number of tasks (processes)
 #SBATCH --nodes=1         # number of nodes
-#SBATCH --gpus=1          # <-- update this to match the number of GPUs you want (e.g. --gpus=2)
+#SBATCH --gpus=2          # <-- update this to match the number of GPUs you want (e.g. --gpus=2)
 #SBATCH --mem-per-cpu=32768M   # memory per CPU core
-#SBATCH --qos=cs
+#SBATCH --qos=standby
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=ansonsav@byu.edu
 
@@ -13,9 +13,9 @@
 
 # Dataset selection: choose which dataset type to use
 
-DATASET_TYPE="discrete"  # Options: "discrete" or "hdri"
+DATASET_TYPE="mixed"  # Options: "hdri", "discrete", "interiorverse", "mixed"
 MODEL_NAME="zheng95z/x-to-rgb"
-OUTPUT_DIR="x2rgb-finetuned_${DATASET_TYPE}_with_velocity"
+OUTPUT_DIR="x2rgb-finetuned_${DATASET_TYPE}_mixed_with_velocity_standby_test"
 export HF_HUB_OFFLINE=1
 export PYTHONPATH=/home/ansonsav/.local/lib/python3.10/site-packages:$PYTHONPATH
 

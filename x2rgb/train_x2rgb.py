@@ -23,7 +23,7 @@ from pipeline_x2rgb import StableDiffusionAOVDropoutPipeline
 
 # Import the dataset
 sys.path.append(os.path.join(os.path.dirname(__file__), "../../"))
-from dataloader import LightingFineTuneDataset
+from datasets import LightingFineTuneDataset, LightingFineTuneDatasetDiscrete, InteriorverseFineTuneDataset, MixedAOVDataset
 
 from typing import Optional
 
@@ -33,8 +33,9 @@ def create_dataset(dataset_type: str, dataset_path: Optional[str] = None):
     """Factory function to create the appropriate dataset based on type.
     
     Args:
-        dataset_type: Either "hdri" or "discrete"
+        dataset_type: One of "hdri", "discrete", "interiorverse", or "mixed"
         dataset_path: Optional override path. If not provided, uses default paths based on dataset_type.
+                     For "mixed" type, this parameter is ignored.
     
     Returns:
         Dataset instance of the appropriate type.
@@ -43,10 +44,19 @@ def create_dataset(dataset_type: str, dataset_path: Optional[str] = None):
     DEFAULT_PATHS = {
         "hdri": "/grphome/grp_cs_650_rgb_x/nobackup/autodelete/blender_aov_dataset/aov_test_05",
         "discrete": "/grphome/grp_cs_650_rgb_x/nobackup/autodelete/blender_aov_dataset/product_content_lock_test_03",
+        "interiorverse": os.path.expanduser('~/groups/grp_cs_650_rgb_x/nobackup/autodelete/interiorverse_dataset'),
     }
     
+    if dataset_type == "mixed":
+        # Create a mixed dataset with all available dataset types
+        datasets = []
+        datasets.append(LightingFineTuneDataset(DEFAULT_PATHS["hdri"]))
+        datasets.append(LightingFineTuneDatasetDiscrete(DEFAULT_PATHS["discrete"]))
+        datasets.append(InteriorverseFineTuneDataset(DEFAULT_PATHS["interiorverse"]))
+        return MixedAOVDataset(datasets, standard_size=(512, 512))
+    
     if dataset_type not in DEFAULT_PATHS:
-        raise ValueError(f"Unknown dataset_type: {dataset_type}. Choose 'hdri' or 'discrete'.")
+        raise ValueError(f"Unknown dataset_type: {dataset_type}. Choose 'hdri', 'discrete', 'interiorverse', or 'mixed'.")
     
     # Use provided path or fall back to default
     path = dataset_path if dataset_path is not None else DEFAULT_PATHS[dataset_type]
@@ -54,8 +64,9 @@ def create_dataset(dataset_type: str, dataset_path: Optional[str] = None):
     if dataset_type == "hdri":
         return LightingFineTuneDataset(path)
     elif dataset_type == "discrete":
-        from dataloader import LightingFineTuneDatasetDiscrete
         return LightingFineTuneDatasetDiscrete(path)
+    elif dataset_type == "interiorverse":
+        return InteriorverseFineTuneDataset(path)
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Simple training script for x2rgb.")
@@ -70,8 +81,8 @@ def parse_args():
         "--dataset_type",
         type=str,
         default="hdri",
-        choices=["hdri", "discrete"],
-        help="Type of dataset to use: 'hdri' for aov_test_05 or 'discrete' for product_content_lock_test_03.",
+        choices=["hdri", "discrete", "interiorverse", "mixed"],
+        help="Type of dataset to use: 'hdri', 'discrete', 'interiorverse', or 'mixed' (combines all datasets).",
     )
     parser.add_argument(
         "--dataset_path",

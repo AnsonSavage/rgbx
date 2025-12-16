@@ -31,25 +31,29 @@ def load_aov_image(filepath, aov_type: str, device='cuda'):
         return None
     
     # Load based on file extension and AOV type
-    if filepath.endswith(".exr"):
-        if aov_type == 'normal':
-            return load_exr_image(filepath, normalize=True).to(device)
-        elif aov_type == 'irradiance':
-            return load_exr_image(filepath, tonemapping=True, clamp=True).to(device)
-        else:  # albedo, roughness, metallic
-            return load_exr_image(filepath, clamp=True).to(device)
-    
-    elif filepath.endswith((".png", ".jpg", ".jpeg")):
-        if aov_type == 'normal':
-            return load_ldr_image(filepath, normalize=True).to(device)
-        elif aov_type == 'albedo':
-            return load_ldr_image(filepath, from_srgb=True).to(device)
-        elif aov_type == 'irradiance':
-            return load_ldr_image(filepath, from_srgb=True, clamp=True).to(device)
-        else:  # roughness, metallic
-            return load_ldr_image(filepath, clamp=True).to(device)
-    
-    else:
+    try:
+        if filepath.endswith(".exr"):
+            if aov_type == 'normal':
+                return load_exr_image(filepath, normalize=True).to(device)
+            elif aov_type == 'irradiance':
+                return load_exr_image(filepath, tonemapping=True, clamp=True).to(device)
+            else:  # albedo, roughness, metallic
+                return load_exr_image(filepath, clamp=True).to(device)
+        
+        elif filepath.endswith((".png", ".jpg", ".jpeg")):
+            if aov_type == 'normal':
+                return load_ldr_image(filepath, normalize=True).to(device)
+            elif aov_type == 'albedo':
+                return load_ldr_image(filepath, from_srgb=True).to(device)
+            elif aov_type == 'irradiance':
+                return load_ldr_image(filepath, from_srgb=True, clamp=True).to(device)
+            else:  # roughness, metallic
+                return load_ldr_image(filepath, clamp=True).to(device)
+        
+        else:
+            return None
+    except (IOError, FileNotFoundError, Exception) as e:
+        print(f"Warning: Failed to load AOV image {filepath}: {e}", flush=True)
         return None
 
 

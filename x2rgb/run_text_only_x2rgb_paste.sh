@@ -13,10 +13,17 @@ set -euo pipefail
 # ROUGHNESS="/home/ansonsav/groups/grp_cs_650_rgb_x/rgbx/x2rgb/example/kitchen-roughness-512.png"
 # METALLIC="/home/ansonsav/groups/grp_cs_650_rgb_x/rgbx/x2rgb/example/kitchen-metallic-512.png"
 # IRRADIANCE=""
-ALBEDO="/home/ansonsav/groups/grp_cs_650_rgb_x/nobackup/autodelete/blender_aov_dataset/product_content_lock_test_03/42ecdcd1-a78f-49e5-8985-3098948e82b1/aovs/42ecdcd1-a78f-49e5-8985-3098948e82b1_cam_26_scatter_47_objsel_68_aovs/albedo0052.png"
-NORMAL="/home/ansonsav/groups/grp_cs_650_rgb_x/nobackup/autodelete/blender_aov_dataset/product_content_lock_test_03/42ecdcd1-a78f-49e5-8985-3098948e82b1/aovs/42ecdcd1-a78f-49e5-8985-3098948e82b1_cam_26_scatter_47_objsel_68_aovs/normal0052.png"
-ROUGHNESS="/home/ansonsav/groups/grp_cs_650_rgb_x/nobackup/autodelete/blender_aov_dataset/product_content_lock_test_03/42ecdcd1-a78f-49e5-8985-3098948e82b1/aovs/42ecdcd1-a78f-49e5-8985-3098948e82b1_cam_26_scatter_47_objsel_68_aovs/roughness0052.png"
-METALLIC="/home/ansonsav/groups/grp_cs_650_rgb_x/nobackup/autodelete/blender_aov_dataset/product_content_lock_test_03/42ecdcd1-a78f-49e5-8985-3098948e82b1/aovs/42ecdcd1-a78f-49e5-8985-3098948e82b1_cam_26_scatter_47_objsel_68_aovs/metallic0052.png"
+
+# ALBEDO="/home/ansonsav/groups/grp_cs_650_rgb_x/nobackup/autodelete/blender_aov_dataset/product_content_lock_test_03/42ecdcd1-a78f-49e5-8985-3098948e82b1/aovs/42ecdcd1-a78f-49e5-8985-3098948e82b1_cam_26_scatter_47_objsel_68_aovs/albedo0052.png"
+# NORMAL="/home/ansonsav/groups/grp_cs_650_rgb_x/nobackup/autodelete/blender_aov_dataset/product_content_lock_test_03/42ecdcd1-a78f-49e5-8985-3098948e82b1/aovs/42ecdcd1-a78f-49e5-8985-3098948e82b1_cam_26_scatter_47_objsel_68_aovs/normal0052.png"
+# ROUGHNESS="/home/ansonsav/groups/grp_cs_650_rgb_x/nobackup/autodelete/blender_aov_dataset/product_content_lock_test_03/42ecdcd1-a78f-49e5-8985-3098948e82b1/aovs/42ecdcd1-a78f-49e5-8985-3098948e82b1_cam_26_scatter_47_objsel_68_aovs/roughness0052.png"
+# METALLIC="/home/ansonsav/groups/grp_cs_650_rgb_x/nobackup/autodelete/blender_aov_dataset/product_content_lock_test_03/42ecdcd1-a78f-49e5-8985-3098948e82b1/aovs/42ecdcd1-a78f-49e5-8985-3098948e82b1_cam_26_scatter_47_objsel_68_aovs/metallic0052.png"
+# IRRADIANCE=""
+
+ALBEDO="/home/ansonsav/groups/grp_cs_650_rgb_x/nobackup/autodelete/blender_aov_dataset/product_content_lock_test_03/bcb89eac-d490-4271-a903-abc7f196559e/aovs/bcb89eac-d490-4271-a903-abc7f196559e_cam_33_scatter_54_objsel_75_aovs/albedo0000.png"
+NORMAL="/home/ansonsav/groups/grp_cs_650_rgb_x/nobackup/autodelete/blender_aov_dataset/product_content_lock_test_03/bcb89eac-d490-4271-a903-abc7f196559e/aovs/bcb89eac-d490-4271-a903-abc7f196559e_cam_33_scatter_54_objsel_75_aovs/normal0000.png"
+ROUGHNESS="/home/ansonsav/groups/grp_cs_650_rgb_x/nobackup/autodelete/blender_aov_dataset/product_content_lock_test_03/bcb89eac-d490-4271-a903-abc7f196559e/aovs/bcb89eac-d490-4271-a903-abc7f196559e_cam_33_scatter_54_objsel_75_aovs/roughness0000.png"
+METALLIC="/home/ansonsav/groups/grp_cs_650_rgb_x/nobackup/autodelete/blender_aov_dataset/product_content_lock_test_03/bcb89eac-d490-4271-a903-abc7f196559e/aovs/bcb89eac-d490-4271-a903-abc7f196559e_cam_33_scatter_54_objsel_75_aovs/metallic0000.png"
 IRRADIANCE=""
 
 # Required: prompt (or use PROMPTS_FILE for batch)
@@ -25,7 +32,7 @@ PROMPT=""
 # Optional: path to a text file with one prompt per line to run in batch
 PROMPTS_FILE="./prompts.txt"
 # Directory where outputs will be written (always used)
-OUTPUT_DIR="./outputs_from_dataset"
+OUTPUT_DIR="./outputs/outputs_from_dataset"
 # Optional run label that will be included in the filename when provided.
 # Example: RUN_NAME="experimentA" -> outputs/out_experimentA_20251209_123000.png
 RUN_NAME="no_fine_tune"
@@ -33,8 +40,9 @@ RUN_NAME="no_fine_tune"
 # Optional runtime options
 DEVICE="cuda"            # e.g. cuda or cpu
 SEED=42
-INFERENCE_STEP=100
-UNET_CHECKPOINT="" #"/home/ansonsav/groups/grp_cs_650_rgb_x/rgbx/x2rgb/x2rgb-finetuned_discrete_with_velocity/checkpoint-350/"       # optional path to UNet checkpoint directory
+INFERENCE_STEPS=100
+UNET_CHECKPOINT=""
+# UNET_CHECKPOINT="/home/ansonsav/groups/grp_cs_650_rgb_x/rgbx/x2rgb/x2rgb-finetuned_mixed_mixed_with_velocity_standby_test/checkpoint-2300/unet/"
 CACHE_DIR="./model_cache"
 
 # If you want to use a specific python, set the env var PYTHON before running,
@@ -71,7 +79,7 @@ if [[ -n "$PROMPT" ]]; then
 fi
 [[ -n "$DEVICE" ]] && ARGS+=(--device "$DEVICE")
 [[ -n "$SEED" ]] && ARGS+=(--seed "$SEED")
-[[ -n "$INFERENCE_STEP" ]] && ARGS+=(--inference_step "$INFERENCE_STEP")
+[[ -n "$INFERENCE_STEPS" ]] && ARGS+=(--inference_steps "$INFERENCE_STEPS")
 [[ -n "$UNET_CHECKPOINT" ]] && ARGS+=(--unet_checkpoint "$UNET_CHECKPOINT")
 [[ -n "$CACHE_DIR" ]] && ARGS+=(--cache_dir "$CACHE_DIR")
 

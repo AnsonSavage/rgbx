@@ -96,7 +96,14 @@ def load_ldr_image(image_path, from_srgb=False, clamp=False, normalize=False):
 
 
 def load_exr_image(image_path, tonemapping=False, clamp=False, normalize=False):
-    image = cv2.cvtColor(cv2.imread(image_path, -1), cv2.COLOR_BGR2RGB)
+    if not os.path.exists(image_path):
+        raise FileNotFoundError(f"EXR image not found: {image_path}")
+    
+    raw_image = cv2.imread(image_path, -1)
+    if raw_image is None:
+        raise IOError(f"Failed to load EXR image (cv2.imread returned None): {image_path}")
+    
+    image = cv2.cvtColor(raw_image, cv2.COLOR_BGR2RGB)
     image = torch.from_numpy(image.astype("float32"))  # (h, w, c)
     image[~torch.isfinite(image)] = 0
     if tonemapping:

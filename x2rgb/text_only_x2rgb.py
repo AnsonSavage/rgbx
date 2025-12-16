@@ -140,7 +140,7 @@ def main(args):
         roughness=roughness_image,
         metallic=metallic_image,
         irradiance=irradiance_image,
-        num_inference_steps=args.inference_step,
+        num_inference_steps=args.inference_steps,
         height=height,
         width=width,
         generator=generator,
@@ -177,7 +177,7 @@ def main(args):
             "device": device,
             "model_id": "zheng95z/x-to-rgb",
             "unet_checkpoint": args.unet_checkpoint,
-            "inference_step": args.inference_step,
+            "inference_steps": args.inference_steps,
             "guidance_scale": args.guidance_scale,
             "image_guidance_scale": args.image_guidance_scale,
             "cache_dir": args.cache_dir,
@@ -226,7 +226,7 @@ if __name__ == "__main__":
     # --- Model Parameter Arguments ---
     parser.add_argument("--prompt", type=str, required=False, default=None, help="Text prompt for generation")
     parser.add_argument("--seed", type=int, default=42, help="Random seed. Use -1 for a random seed.")
-    parser.add_argument("--inference_step", type=int, default=100, help="Number of inference steps")
+    parser.add_argument("--inference_steps", type=int, default=100, help="Number of inference steps")
     parser.add_argument("--guidance_scale", type=float, default=7.5, help="Text guidance scale")
     parser.add_argument("--image_guidance_scale", type=float, default=1.5, help="Image guidance scale")
     parser.add_argument("--unet_checkpoint", type=str, default=None, help="Path to UNet checkpoint to load (optional)")

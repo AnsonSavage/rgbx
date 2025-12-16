@@ -1,9 +1,9 @@
 #!/bin/bash
 
-#SBATCH --time=8:00:00   # walltime
+#SBATCH --time=18:00:00   # walltime
 #SBATCH --ntasks=16        # number of tasks (processes)
 #SBATCH --nodes=1         # number of nodes
-#SBATCH --gpus=2          # <-- update this to match the number of GPUs you want (e.g. --gpus=2)
+#SBATCH --gpus=8          # <-- update this to match the number of GPUs you want (e.g. --gpus=2)
 #SBATCH --mem-per-cpu=32768M   # memory per CPU core
 #SBATCH --qos=standby
 #SBATCH --mail-type=ALL
@@ -15,7 +15,7 @@
 
 DATASET_TYPE="mixed"  # Options: "hdri", "discrete", "interiorverse", "mixed"
 MODEL_NAME="zheng95z/x-to-rgb"
-OUTPUT_DIR="x2rgb-finetuned_${DATASET_TYPE}_mixed_with_velocity_standby_test"
+OUTPUT_DIR="./checkpoints/x2rgb-finetuned_${DATASET_TYPE}_mixed_with_velocity_random_material"
 export HF_HUB_OFFLINE=1
 export PYTHONPATH=/home/ansonsav/.local/lib/python3.10/site-packages:$PYTHONPATH
 
@@ -42,6 +42,6 @@ fi
   --dataset_type="$DATASET_TYPE" \
   --output_dir="$OUTPUT_DIR" \
   --train_batch_size=32 \
-  --num_train_epochs=10 \
+  --num_train_epochs=40 \
   --learning_rate=1e-6 \
   --prob_prompt_dropout=0.1

@@ -12,3 +12,4 @@ x2rgb/outputs/*
 *.out
 x2rgb/*.png
 x2rgb/outputs*/**
+x2rgb/outputs

@@ -44,6 +44,7 @@ def create_dataset(dataset_type: str, dataset_path: Optional[str] = None):
     DEFAULT_PATHS = {
         "hdri": "/grphome/grp_cs_650_rgb_x/nobackup/autodelete/blender_aov_dataset/aov_test_05",
         "discrete": "/grphome/grp_cs_650_rgb_x/nobackup/autodelete/blender_aov_dataset/product_content_lock_test_03",
+        "discrete_random_material": "/grphome/grp_cs_650_rgb_x/nobackup/autodelete/blender_aov_dataset/product_content_lock_test_varied_materials_06",
         "interiorverse": os.path.expanduser('~/groups/grp_cs_650_rgb_x/nobackup/autodelete/interiorverse_dataset'),
     }
     
@@ -52,8 +53,19 @@ def create_dataset(dataset_type: str, dataset_path: Optional[str] = None):
         datasets = []
         datasets.append(LightingFineTuneDataset(DEFAULT_PATHS["hdri"]))
         datasets.append(LightingFineTuneDatasetDiscrete(DEFAULT_PATHS["discrete"]))
+        datasets.append(LightingFineTuneDatasetDiscrete(DEFAULT_PATHS["discrete_random_material"]))
         datasets.append(InteriorverseFineTuneDataset(DEFAULT_PATHS["interiorverse"]))
-        return MixedAOVDataset(datasets, standard_size=(512, 512))
+        print("Length of each dataset in mixed dataset:")
+        print(" - HDRI dataset:", len(datasets[0]))
+        print(" - Discrete dataset:", len(datasets[1]))
+        print(" - Discrete Random Material dataset:", len(datasets[2]))
+        print(" - Interiorverse dataset:", len(datasets[3]))
+        mixed_aov_dataset = MixedAOVDataset(datasets, standard_size=(512, 512))
+        print("Total length of mixed dataset:", len(mixed_aov_dataset))
+
+        import sys
+        sys.exit(0)
+        # return MixedAOVDataset(datasets, standard_size=(512, 512))
     
     if dataset_type not in DEFAULT_PATHS:
         raise ValueError(f"Unknown dataset_type: {dataset_type}. Choose 'hdri', 'discrete', 'interiorverse', or 'mixed'.")
@@ -80,7 +92,7 @@ def parse_args():
     parser.add_argument(
         "--dataset_type",
         type=str,
-        default="hdri",
+        default="mixed",
         choices=["hdri", "discrete", "interiorverse", "mixed"],
         help="Type of dataset to use: 'hdri', 'discrete', 'interiorverse', or 'mixed' (combines all datasets).",
     )
@@ -480,8 +492,8 @@ def main():
                 
                 empty_irradiance_channel = torch.zeros((batch_size, 3, *aov_latents_list[0].shape[2:]), device=accelerator.device)
                 aov_latents_list.append(empty_irradiance_channel) # Append empty irradiance channel
-                conditioning_latents = torch.cat(aov_latents_list, dim=1) # Size [batch_size, 4 x num_aovs, H/8, W/8]
-                unet_input = torch.cat([noisy_latents, conditioning_latents], dim=1)
+                conditioning_latents = torch.cat(aov_latents_list, dim=1) # Size [batch_size, 4 x num_aovs + 3 = 19 , H/8, W/8]
+                unet_input = torch.cat([noisy_latents, conditioning_latents], dim=1) # Size [batch_size, 4 + 4 x num_aovs + 3 = 23, H/8, W/8]
 
                 # F. Predict Noise
                 model_pred = unet(unet_input, timesteps, encoder_hidden_states=encoder_hidden_states).sample

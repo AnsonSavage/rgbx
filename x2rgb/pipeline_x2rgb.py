@@ -469,6 +469,12 @@ class StableDiffusionAOVDropoutPipeline(
 
         batch_size = batch_size * num_images_per_prompt
 
+        # If we're generating multiple images per prompt but only have a single conditioning image,
+        # duplicate it before VAE encoding. Without this, the generator-list codepath slices empty
+        # tensors (image[1:2], image[2:3], ...), leading to 0-element encodes and downstream errors.
+        if isinstance(image, torch.Tensor) and image.ndim >= 4 and image.shape[0] == 1 and batch_size > 1:
+            image = image.repeat(batch_size, *([1] * (image.ndim - 1)))
+
         if image.shape[1] == 4: # Checks to see if the image is already in latent space
             image_latents = image
         else:
@@ -797,8 +803,9 @@ class StableDiffusionAOVDropoutPipeline(
         }
         for aov_name, aov in preprocessed_aovs.items(): # NOTE: As far as I understand, this will always be the same length as required_aovs, and in the same order
             if aov is None:
+                effective_batch = batch_size * num_images_per_prompt
                 image_latent = torch.zeros(
-                    batch_size,
+                    effective_batch,
                     num_channels_latents,
                     height_latent,
                     width_latent,
@@ -822,6 +829,13 @@ class StableDiffusionAOVDropoutPipeline(
                         align_corners=False,
                         antialias=True,
                     )
+                    # Match the effective batch size when sampling multiple images per prompt.
+                    # The non-irradiance AOVs go through `prepare_image_latents`, which expands to
+                    # `batch_size * num_images_per_prompt`. Irradiance must do the same.
+                    if num_images_per_prompt is not None and num_images_per_prompt > 1:
+                        effective_batch = batch_size * num_images_per_prompt
+                        if image_latent.shape[0] == batch_size and effective_batch != batch_size:
+                            image_latent = image_latent.repeat_interleave(num_images_per_prompt, dim=0)
                     if do_classifier_free_guidance:
                         uncond_image_latent = torch.zeros_like(image_latent)
                         image_latent = torch.cat(

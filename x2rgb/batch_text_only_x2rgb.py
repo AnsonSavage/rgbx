@@ -66,27 +66,144 @@ def _normalize_checkpoint_value(value: str) -> str:
     return value
 
 
-def _resolve_unet_checkpoint_dir(checkpoint_value: str) -> Optional[Path]:
+def _looks_like_diffusers_unet_dir(p: Path) -> bool:
+    return (p / "config.json").exists() and (
+        (p / "diffusion_pytorch_model.safetensors").exists() or (p / "diffusion_pytorch_model.bin").exists()
+    )
+
+
+def _looks_like_diffusers_pipeline_dir(p: Path) -> bool:
+    return (p / "model_index.json").exists()
+
+
+def _pick_single_safetensors_file(p: Path) -> Optional[Path]:
+    if p.is_file() and p.suffix == ".safetensors":
+        return p
+    if not p.is_dir():
+        return None
+    candidates = sorted(p.glob("*.safetensors"))
+    if not candidates:
+        return None
+    if len(candidates) == 1:
+        return candidates[0]
+    preferred = [c for c in candidates if c.name in {"pipeline.safetensors", "model.safetensors", "checkpoint.safetensors"}]
+    if len(preferred) == 1:
+        return preferred[0]
+    raise ValueError(
+        f"Checkpoint directory contains multiple .safetensors files; please point to the file explicitly: {p} -> {[c.name for c in candidates]}"
+    )
+
+
+def _resolve_checkpoint(checkpoint_value: str) -> Tuple[str, Optional[Path]]:
     checkpoint_value = _normalize_checkpoint_value(checkpoint_value)
     if checkpoint_value == "":
-        return None
+        return ("base", None)
 
     p = Path(checkpoint_value).expanduser().resolve()
     if not p.exists():
         raise FileNotFoundError(f"Checkpoint path does not exist: {p}")
+
+    # Legacy: allow pointing directly to a single safetensors file.
     if p.is_file():
-        raise ValueError(f"Checkpoint path must be a directory (UNet dir or checkpoint dir): {p}")
+        if p.suffix == ".safetensors":
+            return ("pipeline_safetensors", p)
+        raise ValueError(f"Checkpoint path must be a directory or a .safetensors file: {p}")
 
-    # Accept either a direct UNet folder or a parent containing an "unet" folder.
-    has_config = (p / "config.json").exists()
-    has_weights = (p / "diffusion_pytorch_model.safetensors").exists() or (p / "diffusion_pytorch_model.bin").exists()
-    if has_config and has_weights:
-        return p
-    if (p / "unet").is_dir():
-        return (p / "unet").resolve()
+    if not p.is_dir():
+        raise ValueError(f"Checkpoint path must be a directory or a .safetensors file: {p}")
 
-    # Last resort: allow the directory as-is (diffusers will error with a clearer message)
-    return p
+    # New convention: if the user points at a folder literally named "unet", treat it as a UNet-only checkpoint.
+    if p.name == "unet":
+        return ("unet", p)
+
+    # Back-compat: allow passing a checkpoint dir that contains an "unet" folder.
+    unet_dir = p / "unet"
+    if unet_dir.is_dir() and _looks_like_diffusers_unet_dir(unet_dir):
+        return ("unet", unet_dir.resolve())
+
+    # If this looks like a diffusers pipeline directory, load the whole pipeline.
+    if _looks_like_diffusers_pipeline_dir(p):
+        return ("pipeline_dir", p)
+
+    # Legacy convention: directory containing a single .safetensors file with (some or all) component weights.
+    st_path = _pick_single_safetensors_file(p)
+    if st_path is not None:
+        return ("pipeline_safetensors", st_path)
+
+    # Last resort: treat as UNet dir (diffusers will error with a clearer message).
+    return ("unet", p)
+
+
+def _cast_state_dict(sd: Dict[str, torch.Tensor], dtype: torch.dtype) -> Dict[str, torch.Tensor]:
+    out: Dict[str, torch.Tensor] = {}
+    for k, v in sd.items():
+        if not isinstance(v, torch.Tensor):
+            continue
+        if v.dtype != dtype:
+            out[k] = v.to(dtype=dtype)
+        else:
+            out[k] = v
+    return out
+
+
+def _load_legacy_safetensors(pipe: StableDiffusionAOVDropoutPipeline, safetensors_path: Path) -> None:
+    try:
+        from safetensors.torch import load_file  # type: ignore
+    except Exception as e:
+        raise ImportError(
+            "Loading legacy .safetensors checkpoints requires the 'safetensors' package. "
+            "Install it in your environment (e.g. `pip install safetensors`)."
+        ) from e
+
+    print(f"[pipeline] Loading legacy weights from: {safetensors_path}", flush=True)
+    tensors = load_file(str(safetensors_path))
+
+    buckets: Dict[str, Dict[str, torch.Tensor]] = {"unet": {}, "vae": {}, "text_encoder": {}}
+    unprefixed: Dict[str, torch.Tensor] = {}
+    for k, v in tensors.items():
+        if k.startswith("unet."):
+            buckets["unet"][k[len("unet."):]] = v
+        elif k.startswith("vae."):
+            buckets["vae"][k[len("vae."):]] = v
+        elif k.startswith("text_encoder."):
+            buckets["text_encoder"][k[len("text_encoder."):]] = v
+        else:
+            unprefixed[k] = v
+
+    loaded_any = False
+    if buckets["unet"]:
+        result = pipe.unet.load_state_dict(_cast_state_dict(buckets["unet"], pipe.unet.dtype), strict=False)
+        print(
+            f"[pipeline]   unet: loaded (missing={len(result.missing_keys)} unexpected={len(result.unexpected_keys)})",
+            flush=True,
+        )
+        loaded_any = True
+    if buckets["vae"]:
+        result = pipe.vae.load_state_dict(_cast_state_dict(buckets["vae"], pipe.vae.dtype), strict=False)
+        print(
+            f"[pipeline]   vae: loaded (missing={len(result.missing_keys)} unexpected={len(result.unexpected_keys)})",
+            flush=True,
+        )
+        loaded_any = True
+    if buckets["text_encoder"]:
+        result = pipe.text_encoder.load_state_dict(
+            _cast_state_dict(buckets["text_encoder"], pipe.text_encoder.dtype), strict=False
+        )
+        print(
+            f"[pipeline]   text_encoder: loaded (missing={len(result.missing_keys)} unexpected={len(result.unexpected_keys)})",
+            flush=True,
+        )
+        loaded_any = True
+
+    if loaded_any:
+        return
+
+    # Fallback: treat it as an unet-only state dict without the "unet." prefix.
+    result = pipe.unet.load_state_dict(_cast_state_dict(unprefixed, pipe.unet.dtype), strict=False)
+    print(
+        f"[pipeline]   unet (unprefixed): loaded (missing={len(result.missing_keys)} unexpected={len(result.unexpected_keys)})",
+        flush=True,
+    )
 
 
 def _find_aov_file(aov_dir: Path, aov_type: str, allow_multiple: bool) -> Optional[Path]:
@@ -126,25 +243,36 @@ def parse_aov_folder(aov_dir: str, aov_types: List[str], allow_multiple: bool) -
     return result
 
 
-def load_pipeline(device: str, cache_dir: str, unet_checkpoint: Optional[Path]) -> StableDiffusionAOVDropoutPipeline:
-    print(
-        f"[pipeline] Loading base model '{MODEL_ID}' (device={device}, cache_dir={Path(cache_dir).expanduser().resolve()})",
-        flush=True,
-    )
-    pipe = StableDiffusionAOVDropoutPipeline.from_pretrained(
-        MODEL_ID,
-        torch_dtype=torch.float16,
-        cache_dir=str(Path(cache_dir).expanduser().resolve()),
-    ).to(device)
+def load_pipeline(
+    device: str, cache_dir: str, checkpoint_kind: str, checkpoint_path: Optional[Path]
+) -> StableDiffusionAOVDropoutPipeline:
+    if checkpoint_kind == "pipeline_dir" and checkpoint_path is not None:
+        print(f"[pipeline] Loading full pipeline from: {checkpoint_path}", flush=True)
+        pipe = StableDiffusionAOVDropoutPipeline.from_pretrained(
+            str(checkpoint_path.resolve()),
+            torch_dtype=torch.float16,
+        ).to(device)
+    else:
+        print(
+            f"[pipeline] Loading base model '{MODEL_ID}' (device={device}, cache_dir={Path(cache_dir).expanduser().resolve()})",
+            flush=True,
+        )
+        pipe = StableDiffusionAOVDropoutPipeline.from_pretrained(
+            MODEL_ID,
+            torch_dtype=torch.float16,
+            cache_dir=str(Path(cache_dir).expanduser().resolve()),
+        ).to(device)
 
-    if unet_checkpoint is not None:
-        unet_checkpoint = unet_checkpoint.resolve()
-        if not unet_checkpoint.is_dir():
-            raise NotADirectoryError(f"UNet checkpoint must be a directory: {unet_checkpoint}")
-        print(f"[pipeline] Loading UNet weights from checkpoint: {unet_checkpoint}", flush=True)
-        unet = pipe.unet
-        unet = unet.__class__.from_pretrained(str(unet_checkpoint), torch_dtype=torch.float16).to(device)
-        pipe.unet = unet
+        if checkpoint_kind == "unet" and checkpoint_path is not None:
+            unet_checkpoint = checkpoint_path.resolve()
+            if not unet_checkpoint.is_dir():
+                raise NotADirectoryError(f"UNet checkpoint must be a directory: {unet_checkpoint}")
+            print(f"[pipeline] Loading UNet weights from checkpoint: {unet_checkpoint}", flush=True)
+            unet = pipe.unet
+            unet = unet.__class__.from_pretrained(str(unet_checkpoint), torch_dtype=torch.float16).to(device)
+            pipe.unet = unet
+        elif checkpoint_kind == "pipeline_safetensors" and checkpoint_path is not None:
+            _load_legacy_safetensors(pipe, checkpoint_path.resolve())
 
     print("[pipeline] Configuring scheduler (DDIM)", flush=True)
 
@@ -176,7 +304,9 @@ def _checkpoint_id(unet_checkpoint: Optional[Path]) -> str:
     if unet_checkpoint is None:
         return "base"
     s = str(unet_checkpoint)
-    return f"{_slug(unet_checkpoint.name, 60)}__{_stable_hash(s)}"
+    # Make IDs nicer when pointing at .../checkpoint-XXXX/unet
+    display_name = unet_checkpoint.parent.name if unet_checkpoint.name == "unet" else unet_checkpoint.name
+    return f"{_slug(display_name, 60)}__{_stable_hash(s)}"
 
 
 def _aovset_id(aov_dir: str) -> str:
@@ -236,26 +366,28 @@ def run(args: argparse.Namespace) -> int:
         f"[run] Steps={args.inference_steps} seed={args.seed} guidance_scale={args.guidance_scale} image_guidance_scale={args.image_guidance_scale}",
         flush=True,
     )
+    print(f"[run] Samples per configuration: {int(args.num_samples)}", flush=True)
 
     # Resolve checkpoints once
-    resolved_checkpoints: List[Tuple[str, Optional[Path]]] = []
+    resolved_checkpoints: List[Tuple[str, str, Optional[Path]]] = []
     for cp in checkpoints:
         print(f"[run] Resolving checkpoint: {cp!r}", flush=True)
-        resolved_checkpoints.append((cp, _resolve_unet_checkpoint_dir(cp)))
+        kind, path = _resolve_checkpoint(cp)
+        resolved_checkpoints.append((cp, kind, path))
 
     # Iterate checkpoint-major to minimize model reload overhead
     total_checkpoints = len(resolved_checkpoints)
     total_aov_folders = len(aov_folders)
     total_prompts = len(prompts)
 
-    for cp_index, (cp_raw, unet_dir) in enumerate(resolved_checkpoints, start=1):
-        cp_id = _checkpoint_id(unet_dir)
+    for cp_index, (cp_raw, cp_kind, cp_path) in enumerate(resolved_checkpoints, start=1):
+        cp_id = _checkpoint_id(cp_path)
         print(
-            f"\n=== Checkpoint {cp_index}/{total_checkpoints}: {cp_id} ({'base' if unet_dir is None else unet_dir}) ===",
+            f"\n=== Checkpoint {cp_index}/{total_checkpoints}: {cp_id} ({cp_kind}: {'base' if cp_path is None else cp_path}) ===",
             flush=True,
         )
 
-        pipe = load_pipeline(device=device, cache_dir=args.cache_dir, unet_checkpoint=unet_dir)
+        pipe = load_pipeline(device=device, cache_dir=args.cache_dir, checkpoint_kind=cp_kind, checkpoint_path=cp_path)
 
         for aov_index, aov_folder in enumerate(aov_folders, start=1):
             print(f"[aov] ({aov_index}/{total_aov_folders}) Parsing AOV folder: {aov_folder}", flush=True)
@@ -291,17 +423,31 @@ def run(args: argparse.Namespace) -> int:
                 prompt_dir = run_root / aov_id / _prompt_id(prompt)
                 _ensure_dir(prompt_dir)
 
-                out_path = prompt_dir / f"{cp_id}.png"
-                meta_path = prompt_dir / f"{cp_id}.json"
+                num_samples = int(args.num_samples)
+                if num_samples < 1:
+                    raise ValueError("--num_samples must be >= 1")
 
-                generator = torch.Generator(device=device)
-                seed_value = int(args.seed)
-                if seed_value == -1:
-                    seed_value = int(generator.seed())
-                generator.manual_seed(seed_value)
+                generators: List[torch.Generator] = []
+                seed_values: List[int] = []
+                if int(args.seed) == -1:
+                    for _ in range(num_samples):
+                        g = torch.Generator(device=device)
+                        s = int(g.seed())
+                        g.manual_seed(s)
+                        generators.append(g)
+                        seed_values.append(s)
+                else:
+                    base_seed = int(args.seed)
+                    for i in range(num_samples):
+                        g = torch.Generator(device=device)
+                        s = base_seed + i
+                        g.manual_seed(s)
+                        generators.append(g)
+                        seed_values.append(s)
 
+                seed_preview = seed_values[0] if seed_values else int(args.seed)
                 print(
-                    f"[infer] ({prompt_index}/{total_prompts}) checkpoint={cp_id} aovset={aov_id} seed={seed_value} prompt={prompt!r}",
+                    f"[infer] ({prompt_index}/{total_prompts}) checkpoint={cp_id} aovset={aov_id} samples={num_samples} seed0={seed_preview} prompt={prompt!r}",
                     flush=True,
                 )
 
@@ -315,7 +461,8 @@ def run(args: argparse.Namespace) -> int:
                     num_inference_steps=args.inference_steps,
                     height=height,
                     width=width,
-                    generator=generator,
+                    num_images_per_prompt=num_samples,
+                    generator=generators,
                     required_aovs=required_aovs,
                     guidance_scale=args.guidance_scale,
                     image_guidance_scale=args.image_guidance_scale,
@@ -325,47 +472,59 @@ def run(args: argparse.Namespace) -> int:
 
                 print("[infer] Completed diffusion; saving outputs...", flush=True)
 
-                img_np = result.images[0]
-                img_u8 = (np.clip(img_np, 0.0, 1.0) * 255).astype(np.uint8)
-                Image.fromarray(img_u8).save(out_path)
+                images = result.images
+                if not isinstance(images, np.ndarray):
+                    images = np.asarray(images)
 
-                metadata = {
-                    "created_at": datetime.utcnow().isoformat() + "Z",
-                    "run_id": run_id,
-                    "model_id": MODEL_ID,
-                    "checkpoint": cp_raw,
-                    "checkpoint_resolved": None if unet_dir is None else str(unet_dir),
-                    "checkpoint_id": cp_id,
-                    "aov_folder": str(Path(aov_folder).expanduser().absolute()),
-                    "aovset_id": aov_id,
-                    "prompt": prompt,
-                    "prompt_id": _prompt_id(prompt),
-                    "seed": seed_value,
-                    "device": device,
-                    "inference_steps": int(args.inference_steps),
-                    "guidance_scale": float(args.guidance_scale),
-                    "image_guidance_scale": float(args.image_guidance_scale),
-                    "cache_dir": str(Path(args.cache_dir).expanduser().resolve()),
-                    "height": int(height),
-                    "width": int(width),
-                    "aovs": {
-                        aov_type: {
-                            "path": aovset[aov_type],
-                            "shape": _shape_of(aov_tensors[aov_type]),
-                        }
-                        for aov_type in args.aov_types
-                    },
-                    "output_image": str(out_path),
-                }
+                for sample_index in range(num_samples):
+                    sample_tag = "" if num_samples == 1 else f"__s{sample_index + 1:03d}"
+                    out_path = prompt_dir / f"{cp_id}{sample_tag}.png"
+                    meta_path = prompt_dir / f"{cp_id}{sample_tag}.json"
 
-                with meta_path.open("w", encoding="utf-8") as f:
-                    json.dump(metadata, f, indent=2)
+                    img_np = images[sample_index]
+                    img_u8 = (np.clip(img_np, 0.0, 1.0) * 255).astype(np.uint8)
+                    Image.fromarray(img_u8).save(out_path)
 
-                with index_path.open("a", encoding="utf-8") as f:
-                    f.write(json.dumps(metadata) + "\n")
+                    metadata = {
+                        "created_at": datetime.utcnow().isoformat() + "Z",
+                        "run_id": run_id,
+                        "model_id": MODEL_ID,
+                        "checkpoint": cp_raw,
+                        "checkpoint_resolved": None if cp_path is None else str(cp_path),
+                        "checkpoint_kind": cp_kind,
+                        "checkpoint_id": cp_id,
+                        "aov_folder": str(Path(aov_folder).expanduser().absolute()),
+                        "aovset_id": aov_id,
+                        "prompt": prompt,
+                        "prompt_id": _prompt_id(prompt),
+                        "seed": int(seed_values[sample_index]) if seed_values else int(args.seed),
+                        "sample_index": int(sample_index),
+                        "num_samples": int(num_samples),
+                        "device": device,
+                        "inference_steps": int(args.inference_steps),
+                        "guidance_scale": float(args.guidance_scale),
+                        "image_guidance_scale": float(args.image_guidance_scale),
+                        "cache_dir": str(Path(args.cache_dir).expanduser().resolve()),
+                        "height": int(height),
+                        "width": int(width),
+                        "aovs": {
+                            aov_type: {
+                                "path": aovset[aov_type],
+                                "shape": _shape_of(aov_tensors[aov_type]),
+                            }
+                            for aov_type in args.aov_types
+                        },
+                        "output_image": str(out_path),
+                    }
 
-                print(f"[save] Wrote: {out_path}", flush=True)
-                print(f"[save] Meta:  {meta_path}", flush=True)
+                    with meta_path.open("w", encoding="utf-8") as f:
+                        json.dump(metadata, f, indent=2)
+
+                    with index_path.open("a", encoding="utf-8") as f:
+                        f.write(json.dumps(metadata) + "\n")
+
+                    print(f"[save] Wrote: {out_path}", flush=True)
+                    print(f"[save] Meta:  {meta_path}", flush=True)
 
     print("\n[run] Done.", flush=True)
     return 0
@@ -381,7 +540,9 @@ def build_argparser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         help=(
-            "UNet checkpoint directory (e.g. .../checkpoint-2300/unet). "
+            "Checkpoint path. Supports: (1) UNet-only checkpoint dir (e.g. .../checkpoint-2300/unet), "
+            "(2) checkpoint dir containing an 'unet' subdir, or (3) legacy full checkpoint as a single .safetensors file "
+            "(either pass the file directly, or pass a directory containing exactly one .safetensors). "
             "Repeat to provide multiple. Use empty string (\"\"), 'base', or 'none' for the original model."
         ),
     )
@@ -412,6 +573,12 @@ def build_argparser() -> argparse.ArgumentParser:
     p.add_argument("--cache_dir", type=str, default="./model_cache", help="HuggingFace cache dir")
 
     p.add_argument("--seed", type=int, default=-1, help="Seed used for every generation (use -1 for random)")
+    p.add_argument(
+        "--num_samples",
+        type=int,
+        default=1,
+        help="Number of images to sample per checkpoint × AOV folder × prompt (default: 1).",
+    )
     p.add_argument("--inference_steps", type=int, default=100)
     p.add_argument("--guidance_scale", type=float, default=7.5)
     p.add_argument("--image_guidance_scale", type=float, default=1.5)
